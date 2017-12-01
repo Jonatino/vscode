@@ -19,12 +19,18 @@ export enum Parts {
 
 export enum Position {
 	LEFT,
-	RIGHT
+	RIGHT,
+	BOTTOM
 }
 
 export interface ILayoutOptions {
-	forceStyleRecompute?: boolean;
 	toggleMaximizedPanel?: boolean;
+	source?: Parts;
+}
+
+export interface Dimension {
+	readonly width: number;
+	readonly height: number;
 }
 
 export const IPartService = createDecorator<IPartService>('partService');
@@ -38,6 +44,11 @@ export interface IPartService {
 	onTitleBarVisibilityChange: Event<void>;
 
 	/**
+	 * Emits when the editor part's layout changes.
+	 */
+	onEditorLayout: Event<Dimension>;
+
+	/**
 	 * Asks the part service to layout all parts.
 	 */
 	layout(options?: ILayoutOptions): void;
@@ -46,11 +57,6 @@ export interface IPartService {
 	 * Asks the part service to if all parts have been created.
 	 */
 	isCreated(): boolean;
-
-	/**
-	 * Promise is complete when all parts have been created.
-	 */
-	joinCreation(): TPromise<boolean>;
 
 	/**
 	 * Returns whether the given part has the keyboard focus or not.
@@ -63,7 +69,7 @@ export interface IPartService {
 	getContainer(part: Parts): HTMLElement;
 
 	/**
-	 * Returns iff the part is visible.
+	 * Returns if the part is visible.
 	 */
 	isVisible(part: Parts): boolean;
 
@@ -80,12 +86,12 @@ export interface IPartService {
 	/**
 	 * Set sidebar hidden or not
 	 */
-	setSideBarHidden(hidden: boolean): void;
+	setSideBarHidden(hidden: boolean): TPromise<void>;
 
 	/**
 	 * Set panel part hidden or not
 	 */
-	setPanelHidden(hidden: boolean): void;
+	setPanelHidden(hidden: boolean): TPromise<void>;
 
 	/**
 	 * Maximizes the panel height if the panel is not already maximized.
@@ -94,19 +100,24 @@ export interface IPartService {
 	toggleMaximizedPanel(): void;
 
 	/**
+	 * Returns true if the panel is maximized.
+	 */
+	isPanelMaximized(): boolean;
+
+	/**
 	 * Gets the current side bar position. Note that the sidebar can be hidden too.
 	 */
 	getSideBarPosition(): Position;
 
 	/**
-	 * Adds a class to the workbench part.
+	 * Gets the current panel position. Note that the panel can be hidden too.
 	 */
-	addClass(clazz: string): void;
+	getPanelPosition(): Position;
 
 	/**
-	 * Removes a class from the workbench part.
+	 * Sets the panel position.
 	 */
-	removeClass(clazz: string): void;
+	setPanelPosition(position: Position): TPromise<void>;
 
 	/**
 	 * Returns the identifier of the element that contains the workbench.
@@ -117,4 +128,9 @@ export interface IPartService {
 	 * Toggles the workbench in and out of zen mode - parts get hidden and window goes fullscreen.
 	 */
 	toggleZenMode(): void;
+
+	/**
+	 * Resizes currently focused part on main access
+	 */
+	resizePart(part: Parts, sizeChange: number): void;
 }

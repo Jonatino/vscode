@@ -8,10 +8,13 @@ import { TPromise } from 'vs/base/common/winjs.base';
 import paths = require('vs/base/common/paths');
 import URI from 'vs/base/common/uri';
 import glob = require('vs/base/common/glob');
-import events = require('vs/base/common/events');
 import { isLinux } from 'vs/base/common/platform';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import Event from 'vs/base/common/event';
+import { beginsWithIgnoreCase } from 'vs/base/common/strings';
+import { IProgress } from 'vs/platform/progress/common/progress';
+import { IDisposable } from 'vs/base/common/lifecycle';
+import { isEqualOrParent, isEqual } from 'vs/base/common/resources';
 
 export const IFileService = createDecorator<IFileService>('fileService');
 
@@ -30,6 +33,16 @@ export interface IFileService {
 	onAfterOperation: Event<FileOperationEvent>;
 
 	/**
+	 * Registeres a file system provider for a certain scheme.
+	 */
+	registerProvider?(scheme: string, provider: IFileSystemProvider): IDisposable;
+
+	/**
+	 * Checks if this file service can handle the given resource.
+	 */
+	canHandleResource?(resource: URI): boolean;
+
+	/**
 	 * Resolve the properties of a file identified by the resource.
 	 *
 	 * If the optional parameter "resolveTo" is specified in options, the stat service is asked
@@ -41,6 +54,12 @@ export interface IFileService {
 	 * contain a single element.
 	 */
 	resolveFile(resource: URI, options?: IResolveFileOptions): TPromise<IFileStat>;
+
+	/**
+	 * Same as resolveFile but supports resolving mulitple resources in parallel.
+	 * If one of the resolve targets fails to resolve returns a fake IFileStat instead of making the whole call fail.
+	 */
+	resolveFiles(toResolve: { resource: URI, options?: IResolveFileOptions }[]): TPromise<IResolveFileResult[]>;
 
 	/**
 	 *Finds out if a file identified by the resource exists.
@@ -60,11 +79,6 @@ export interface IFileService {
 	 * The returned object contains properties of the file and the value as a readable stream.
 	 */
 	resolveStreamContent(resource: URI, options?: IResolveContentOptions): TPromise<IStreamContent>;
-
-	/**
-	 * Returns the contents of all files by the given array of file resources.
-	 */
-	resolveContents(resources: URI[]): TPromise<IContent[]>;
 
 	/**
 	 * Updates the content replacing its previous value.
@@ -91,7 +105,7 @@ export interface IFileService {
 	 *
 	 * The optional parameter content can be used as value to fill into the new file.
 	 */
-	createFile(resource: URI, content?: string): TPromise<IFileStat>;
+	createFile(resource: URI, content?: string, options?: ICreateFileOptions): TPromise<IFileStat>;
 
 	/**
 	 * Creates a new folder with the given path. The returned promise
@@ -131,23 +145,53 @@ export interface IFileService {
 	 * Allows to stop a watcher on the provided resource or absolute fs path.
 	 */
 	unwatchFileChanges(resource: URI): void;
-	unwatchFileChanges(fsPath: string): void;
 
 	/**
 	 * Configures the file service with the provided options.
 	 */
-	updateOptions(options: any): void;
+	updateOptions(options: object): void;
 
 	/**
 	 * Returns the preferred encoding to use for a given resource.
 	 */
-	getEncoding(resource: URI): string;
+	getEncoding(resource: URI, preferredEncoding?: string): string;
 
 	/**
 	 * Frees up any resources occupied by this service.
 	 */
 	dispose(): void;
 }
+
+
+export enum FileType {
+	File = 0,
+	Dir = 1,
+	Symlink = 2
+}
+export interface IStat {
+	id: number | string;
+	mtime: number;
+	size: number;
+	type: FileType;
+}
+
+export interface IFileSystemProvider {
+
+	onDidChange?: Event<IFileChange[]>;
+
+	// more...
+	//
+	utimes(resource: URI, mtime: number, atime: number): TPromise<IStat>;
+	stat(resource: URI): TPromise<IStat>;
+	read(resource: URI, offset: number, count: number, progress: IProgress<Uint8Array>): TPromise<number>;
+	write(resource: URI, content: Uint8Array): TPromise<void>;
+	move(from: URI, to: URI): TPromise<IStat>;
+	mkdir(resource: URI): TPromise<IStat>;
+	readdir(resource: URI): TPromise<[URI, IStat][]>;
+	rmdir(resource: URI): TPromise<void>;
+	unlink(resource: URI): TPromise<void>;
+}
+
 
 export enum FileOperation {
 	CREATE,
@@ -190,7 +234,7 @@ export enum FileChangeType {
 export interface IFileChange {
 
 	/**
-	 * The type of change that occured to the file.
+	 * The type of change that occurred to the file.
 	 */
 	type: FileChangeType;
 
@@ -200,12 +244,11 @@ export interface IFileChange {
 	resource: URI;
 }
 
-export class FileChangesEvent extends events.Event {
+export class FileChangesEvent {
+
 	private _changes: IFileChange[];
 
 	constructor(changes: IFileChange[]) {
-		super();
-
 		this._changes = changes;
 	}
 
@@ -223,17 +266,17 @@ export class FileChangesEvent extends events.Event {
 			return false;
 		}
 
-		return this._changes.some((change) => {
+		return this._changes.some(change => {
 			if (change.type !== type) {
 				return false;
 			}
 
 			// For deleted also return true when deleted folder is parent of target path
 			if (type === FileChangeType.DELETED) {
-				return isEqual(resource.fsPath, change.resource.fsPath) || isParent(resource.fsPath, change.resource.fsPath);
+				return isEqualOrParent(resource, change.resource, !isLinux /* ignorecase */);
 			}
 
-			return isEqual(resource.fsPath, change.resource.fsPath);
+			return isEqual(resource, change.resource, !isLinux /* ignorecase */);
 		});
 	}
 
@@ -280,32 +323,53 @@ export class FileChangesEvent extends events.Event {
 	}
 
 	private getOfType(type: FileChangeType): IFileChange[] {
-		return this._changes.filter((change) => change.type === type);
+		return this._changes.filter(change => change.type === type);
 	}
 
 	private hasType(type: FileChangeType): boolean {
-		return this._changes.some((change) => {
+		return this._changes.some(change => {
 			return change.type === type;
 		});
 	}
 }
 
-export function isEqual(path1: string, path2: string) {
-	const identityEquals = (path1 === path2);
-	if (isLinux || identityEquals) {
-		return identityEquals;
+export function isParent(path: string, candidate: string, ignoreCase?: boolean): boolean {
+	if (!path || !candidate || path === candidate) {
+		return false;
 	}
 
-	return path1.toLowerCase() === path2.toLowerCase();
+	if (candidate.length > path.length) {
+		return false;
+	}
+
+	if (candidate.charAt(candidate.length - 1) !== paths.nativeSep) {
+		candidate += paths.nativeSep;
+	}
+
+	if (ignoreCase) {
+		return beginsWithIgnoreCase(path, candidate);
+	}
+
+	return path.indexOf(candidate) === 0;
 }
 
-export function isParent(path: string, candidate: string): boolean {
-	if (!isLinux) {
+
+
+export function indexOf(path: string, candidate: string, ignoreCase?: boolean): number {
+	if (candidate.length > path.length) {
+		return -1;
+	}
+
+	if (path === candidate) {
+		return 0;
+	}
+
+	if (ignoreCase) {
 		path = path.toLowerCase();
 		candidate = candidate.toLowerCase();
 	}
 
-	return path.indexOf(candidate + paths.nativeSep) === 0;
+	return path.indexOf(candidate);
 }
 
 export interface IBaseStat {
@@ -340,7 +404,7 @@ export interface IBaseStat {
 export interface IFileStat extends IBaseStat {
 
 	/**
-	 * The resource is a directory. Iff {{true}}
+	 * The resource is a directory. if {{true}}
 	 * {{encoding}} has no meaning.
 	 */
 	isDirectory: boolean;
@@ -362,6 +426,11 @@ export interface IFileStat extends IBaseStat {
 	size?: number;
 }
 
+export interface IResolveFileResult {
+	stat: IFileStat;
+	success: boolean;
+}
+
 /**
  * Content and meta information of a file.
  */
@@ -376,6 +445,14 @@ export interface IContent extends IBaseStat {
 	 * The encoding of the content if known.
 	 */
 	encoding: string;
+}
+
+// this should eventually replace IContent such
+// that we have a clear separation between content
+// and metadata (TODO@Joh, TODO@Ben)
+export interface IContentData {
+	encoding: string;
+	stream: IStringStream;
 }
 
 /**
@@ -424,6 +501,11 @@ export interface IResolveContentOptions {
 	 * the contents of the file.
 	 */
 	encoding?: string;
+
+	/**
+	 * The optional guessEncoding parameter allows to guess encoding from content of the file.
+	 */
+	autoGuessEncoding?: boolean;
 }
 
 export interface IUpdateContentOptions {
@@ -459,14 +541,24 @@ export interface IResolveFileOptions {
 	resolveSingleChildDescendants?: boolean;
 }
 
+export interface ICreateFileOptions {
+
+	/**
+	 * Overwrite the file to create if it already exists on disk. Otherwise
+	 * an error will be thrown (FILE_MODIFIED_SINCE).
+	 */
+	overwrite?: boolean;
+}
+
 export interface IImportResult {
 	stat: IFileStat;
 	isNew: boolean;
 }
 
-export interface IFileOperationResult {
-	message: string;
-	fileOperationResult: FileOperationResult;
+export class FileOperationError extends Error {
+	constructor(message: string, public fileOperationResult: FileOperationResult) {
+		super(message);
+	}
 }
 
 export enum FileOperationResult {
@@ -481,8 +573,6 @@ export enum FileOperationResult {
 	FILE_INVALID_PATH
 }
 
-export const MAX_FILE_SIZE = 50 * 1024 * 1024;
-
 export const AutoSaveConfiguration = {
 	OFF: 'off',
 	AFTER_DELAY: 'afterDelay',
@@ -490,7 +580,16 @@ export const AutoSaveConfiguration = {
 	ON_WINDOW_CHANGE: 'onWindowChange'
 };
 
+export const HotExitConfiguration = {
+	OFF: 'off',
+	ON_EXIT: 'onExit',
+	ON_EXIT_AND_WINDOW_CLOSE: 'onExitAndWindowClose'
+};
+
 export const CONTENT_CHANGE_EVENT_BUFFER_DELAY = 1000;
+
+export const FILES_ASSOCIATIONS_CONFIG = 'files.associations';
+export const FILES_EXCLUDE_CONFIG = 'files.exclude';
 
 export interface IFilesConfiguration {
 	files: {
@@ -498,11 +597,14 @@ export interface IFilesConfiguration {
 		exclude: glob.IExpression;
 		watcherExclude: { [filepattern: string]: boolean };
 		encoding: string;
+		autoGuessEncoding: boolean;
+		defaultLanguage: string;
 		trimTrailingWhitespace: boolean;
 		autoSave: string;
 		autoSaveDelay: number;
 		eol: string;
-		hotExit: boolean;
+		hotExit: string;
+		useExperimentalFileWatcher: boolean;
 	};
 }
 
@@ -720,19 +822,35 @@ export const SUPPORTED_ENCODINGS: { [encoding: string]: { labelLong: string; lab
 		labelShort: 'ISO 8859-11',
 		order: 42
 	},
-	'koi8-ru': {
+	koi8ru: {
 		labelLong: 'Cyrillic (KOI8-RU)',
 		labelShort: 'KOI8-RU',
 		order: 43
 	},
-	'koi8-t': {
+	koi8t: {
 		labelLong: 'Tajik (KOI8-T)',
 		labelShort: 'KOI8-T',
 		order: 44
 	},
-	GB2312: {
+	gb2312: {
 		labelLong: 'Simplified Chinese (GB 2312)',
 		labelShort: 'GB 2312',
 		order: 45
+	},
+	cp865: {
+		labelLong: 'Nordic DOS (CP 865)',
+		labelShort: 'CP 865',
+		order: 46
+	},
+	cp850: {
+		labelLong: 'Western European DOS (CP 850)',
+		labelShort: 'CP 850',
+		order: 47
 	}
 };
+
+export enum FileKind {
+	FILE,
+	FOLDER,
+	ROOT_FOLDER
+}

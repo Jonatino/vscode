@@ -7,12 +7,12 @@
 import * as assert from 'assert';
 import objects = require('vs/base/common/objects');
 
-let check = (one, other, msg) => {
+let check = (one: any, other: any, msg: string) => {
 	assert(objects.equals(one, other), msg);
 	assert(objects.equals(other, one), '[reverse] ' + msg);
 };
 
-let checkNot = (one, other, msg) => {
+let checkNot = (one: any, other: any, msg: string) => {
 	assert(!objects.equals(one, other), msg);
 	assert(!objects.equals(other, one), '[reverse] ' + msg);
 };
@@ -92,11 +92,11 @@ suite('Objects', () => {
 	});
 
 	test('safeStringify', function () {
-		let obj1 = {
+		let obj1: any = {
 			friend: null
 		};
 
-		let obj2 = {
+		let obj2: any = {
 			friend: null
 		};
 
@@ -106,7 +106,7 @@ suite('Objects', () => {
 		let arr: any = [1];
 		arr.push(arr);
 
-		let circular = {
+		let circular: any = {
 			a: 42,
 			b: null,
 			c: [
@@ -138,39 +138,80 @@ suite('Objects', () => {
 		});
 	});
 
-	test('derive', function () {
+	test('distinct', function () {
+		let base = {
+			one: 'one',
+			two: 2,
+			three: {
+				3: true
+			},
+			four: false
+		};
 
-		let someValue = 2;
+		let diff = objects.distinct(base, base);
+		assert.deepEqual(diff, {});
 
-		function Base(): void {
-			//example
-		}
-		(<any>Base).favoriteColor = 'blue';
-		Base.prototype.test = function () { return 42; };
+		let obj = {};
 
-		function Child(): void {
-			//example
-		}
-		Child.prototype.test2 = function () { return 43; };
-		Object.defineProperty(Child.prototype, 'getter', {
-			get: function () { return someValue; },
-			enumerable: true,
-			configurable: true
+		diff = objects.distinct(base, obj);
+		assert.deepEqual(diff, {});
+
+		obj = {
+			one: 'one',
+			two: 2
+		};
+
+		diff = objects.distinct(base, obj);
+		assert.deepEqual(diff, {});
+
+		obj = {
+			three: {
+				3: true
+			},
+			four: false
+		};
+
+		diff = objects.distinct(base, obj);
+		assert.deepEqual(diff, {});
+
+		obj = {
+			one: 'two',
+			two: 2,
+			three: {
+				3: true
+			},
+			four: true
+		};
+
+		diff = objects.distinct(base, obj);
+		assert.deepEqual(diff, {
+			one: 'two',
+			four: true
 		});
 
-		objects.derive(Base, Child);
+		obj = {
+			one: null,
+			two: 2,
+			three: {
+				3: true
+			},
+			four: void 0
+		};
 
-		let base = new Base();
-		let child = new Child();
+		diff = objects.distinct(base, obj);
+		assert.deepEqual(diff, {
+			one: null,
+			four: void 0
+		});
 
-		assert(base instanceof Base);
-		assert(child instanceof Child);
+		obj = {
+			one: 'two',
+			two: 3,
+			three: { 3: false },
+			four: true
+		};
 
-		assert.strictEqual(base.test, child.test);
-		assert.strictEqual(base.test(), 42);
-		assert.strictEqual(child.test2(), 43);
-		assert.strictEqual((<any>Child).favoriteColor, 'blue');
-		someValue = 4;
-		assert.strictEqual(child.getter, 4);
+		diff = objects.distinct(base, obj);
+		assert.deepEqual(diff, obj);
 	});
 });

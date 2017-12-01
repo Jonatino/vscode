@@ -7,11 +7,15 @@
 import 'vs/css!./tree';
 import WinJS = require('vs/base/common/winjs.base');
 import TreeDefaults = require('vs/base/parts/tree/browser/treeDefaults');
-import Events = require('vs/base/common/eventEmitter');
 import Model = require('vs/base/parts/tree/browser/treeModel');
 import View = require('./treeView');
 import _ = require('vs/base/parts/tree/browser/tree');
 import { INavigator, MappedNavigator } from 'vs/base/common/iterator';
+import Event, { Emitter, Relay } from 'vs/base/common/event';
+import { Color } from 'vs/base/common/color';
+import { mixin } from 'vs/base/common/objects';
+import { ISelectionEvent, IFocusEvent, IHighlightEvent } from 'vs/base/parts/tree/browser/tree';
+import { IItemCollapseEvent, IItemExpandEvent } from 'vs/base/parts/tree/browser/treeModel';
 
 export class TreeContext implements _.ITreeContext {
 
@@ -37,8 +41,8 @@ export class TreeContext implements _.ITreeContext {
 		}
 
 		this.dataSource = configuration.dataSource;
-		this.renderer = configuration.renderer || new TreeDefaults.LegacyRenderer();
-		this.controller = configuration.controller || new TreeDefaults.DefaultController();
+		this.renderer = configuration.renderer;
+		this.controller = configuration.controller || new TreeDefaults.DefaultController({ clickBehavior: TreeDefaults.ClickBehavior.ON_MOUSE_UP, keyboardSupport: typeof options.keyboardSupport !== 'boolean' || options.keyboardSupport });
 		this.dnd = configuration.dnd || new TreeDefaults.DefaultDragAndDrop();
 		this.filter = configuration.filter || new TreeDefaults.DefaultFilter();
 		this.sorter = configuration.sorter || null;
@@ -46,29 +50,48 @@ export class TreeContext implements _.ITreeContext {
 	}
 }
 
-export class Tree extends Events.EventEmitter implements _.ITree {
+const defaultStyles: _.ITreeStyles = {
+	listFocusBackground: Color.fromHex('#073655'),
+	listActiveSelectionBackground: Color.fromHex('#0E639C'),
+	listActiveSelectionForeground: Color.fromHex('#FFFFFF'),
+	listFocusAndSelectionBackground: Color.fromHex('#094771'),
+	listFocusAndSelectionForeground: Color.fromHex('#FFFFFF'),
+	listInactiveSelectionBackground: Color.fromHex('#3F3F46'),
+	listHoverBackground: Color.fromHex('#2A2D2E'),
+	listDropBackground: Color.fromHex('#383B3D')
+};
+
+export class Tree implements _.ITree {
 
 	private container: HTMLElement;
-	private configuration: _.ITreeConfiguration;
-	private options: _.ITreeOptions;
 
 	private context: _.ITreeContext;
 	private model: Model.TreeModel;
 	private view: View.TreeView;
 
+	private _onDidChangeFocus = new Relay<IFocusEvent>();
+	readonly onDidChangeFocus: Event<IFocusEvent> = this._onDidChangeFocus.event;
+	private _onDidChangeSelection = new Relay<ISelectionEvent>();
+	readonly onDidChangeSelection: Event<ISelectionEvent> = this._onDidChangeSelection.event;
+	private _onHighlightChange = new Relay<IHighlightEvent>();
+	readonly onDidChangeHighlight: Event<IHighlightEvent> = this._onHighlightChange.event;
+	private _onDidExpandItem = new Relay<IItemExpandEvent>();
+	readonly onDidExpandItem: Event<IItemExpandEvent> = this._onDidExpandItem.event;
+	private _onDidCollapseItem = new Relay<IItemCollapseEvent>();
+	readonly onDidCollapseItem: Event<IItemCollapseEvent> = this._onDidCollapseItem.event;
+	private _onDispose = new Emitter<void>();
+	readonly onDidDispose: Event<void> = this._onDispose.event;
+
 	constructor(container: HTMLElement, configuration: _.ITreeConfiguration, options: _.ITreeOptions = {}) {
-		super();
-
 		this.container = container;
-		this.configuration = configuration;
-		this.options = options;
+		mixin(options, defaultStyles, false);
 
-		this.options.twistiePixels = typeof this.options.twistiePixels === 'number' ? this.options.twistiePixels : 32;
-		this.options.showTwistie = this.options.showTwistie === false ? false : true;
-		this.options.indentPixels = typeof this.options.indentPixels === 'number' ? this.options.indentPixels : 12;
-		this.options.alwaysFocused = this.options.alwaysFocused === true ? true : false;
-		this.options.useShadows = this.options.useShadows === false ? false : true;
-		this.options.paddingOnRow = this.options.paddingOnRow === false ? false : true;
+		options.twistiePixels = typeof options.twistiePixels === 'number' ? options.twistiePixels : 32;
+		options.showTwistie = options.showTwistie === false ? false : true;
+		options.indentPixels = typeof options.indentPixels === 'number' ? options.indentPixels : 12;
+		options.alwaysFocused = options.alwaysFocused === true ? true : false;
+		options.useShadows = options.useShadows === false ? false : true;
+		options.paddingOnRow = options.paddingOnRow === false ? false : true;
 
 		this.context = new TreeContext(this, configuration, options);
 		this.model = new Model.TreeModel(this.context);
@@ -76,8 +99,23 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 
 		this.view.setModel(this.model);
 
-		this.addEmitter2(this.model);
-		this.addEmitter2(this.view);
+		this._onDidChangeFocus.input = this.model.onDidFocus;
+		this._onDidChangeSelection.input = this.model.onDidSelect;
+		this._onHighlightChange.input = this.model.onDidHighlight;
+		this._onDidExpandItem.input = this.model.onDidExpandItem;
+		this._onDidCollapseItem.input = this.model.onDidCollapseItem;
+	}
+
+	public style(styles: _.ITreeStyles): void {
+		this.view.applyStyles(styles);
+	}
+
+	get onDidFocus(): Event<void> {
+		return this.view && this.view.onDOMFocus;
+	}
+
+	get onDidBlur(): Event<void> {
+		return this.view && this.view.onDOMBlur;
 	}
 
 	public getHTMLElement(): HTMLElement {
@@ -120,10 +158,6 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 		return this.model.refresh(element, recursive);
 	}
 
-	public refreshAll(elements: any[], recursive = true): WinJS.Promise {
-		return this.model.refreshAll(elements, recursive);
-	}
-
 	public expand(element: any): WinJS.Promise {
 		return this.model.expand(element);
 	}
@@ -133,15 +167,19 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 	}
 
 	public collapse(element: any, recursive: boolean = false): WinJS.Promise {
-		return this.model.collapse(element);
+		return this.model.collapse(element, recursive);
 	}
 
 	public collapseAll(elements: any[] = null, recursive: boolean = false): WinJS.Promise {
 		return this.model.collapseAll(elements, recursive);
 	}
 
-	public toggleExpansion(element: any): WinJS.Promise {
-		return this.model.toggleExpansion(element);
+	public collapseDeepestExpandedLevel(): WinJS.Promise {
+		return this.model.collapseDeepestExpandedLevel();
+	}
+
+	public toggleExpansion(element: any, recursive: boolean = false): WinJS.Promise {
+		return this.model.toggleExpansion(element, recursive);
 	}
 
 	public toggleExpansionAll(elements: any[]): WinJS.Promise {
@@ -277,16 +315,16 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 		this.model.focusFirstChild(eventPayload);
 	}
 
-	public focusFirst(eventPayload?: any): void {
-		this.model.focusFirst(eventPayload);
+	public focusFirst(eventPayload?: any, from?: any): void {
+		this.model.focusFirst(eventPayload, from);
 	}
 
 	public focusNth(index: number, eventPayload?: any): void {
 		this.model.focusNth(index, eventPayload);
 	}
 
-	public focusLast(eventPayload?: any): void {
-		this.model.focusLast(eventPayload);
+	public focusLast(eventPayload?: any, from?: any): void {
+		this.model.focusLast(eventPayload, from);
 	}
 
 	public focusNextPage(eventPayload?: any): void {
@@ -323,6 +361,8 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 	}
 
 	public dispose(): void {
+		this._onDispose.fire();
+
 		if (this.model !== null) {
 			this.model.dispose();
 			this.model = null;
@@ -332,6 +372,11 @@ export class Tree extends Events.EventEmitter implements _.ITree {
 			this.view = null;
 		}
 
-		super.dispose();
+		this._onDidChangeFocus.dispose();
+		this._onDidChangeSelection.dispose();
+		this._onHighlightChange.dispose();
+		this._onDidExpandItem.dispose();
+		this._onDidCollapseItem.dispose();
+		this._onDispose.dispose();
 	}
 }

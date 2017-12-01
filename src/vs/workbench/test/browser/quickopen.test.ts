@@ -10,8 +10,8 @@ import 'vs/workbench/browser/parts/editor/editor.contribution'; // make sure to 
 import { Promise, TPromise } from 'vs/base/common/winjs.base';
 import Event from 'vs/base/common/event';
 import { IQuickOpenService } from 'vs/platform/quickOpen/common/quickOpen';
-import { Registry } from 'vs/platform/platform';
-import { QuickOpenHandlerDescriptor, IQuickOpenRegistry, Extensions as QuickOpenExtensions, QuickOpenAction } from 'vs/workbench/browser/quickopen';
+import { Registry } from 'vs/platform/registry/common/platform';
+import { QuickOpenHandlerDescriptor, IQuickOpenRegistry, Extensions as QuickOpenExtensions, QuickOpenAction, QuickOpenHandler } from 'vs/workbench/browser/quickopen';
 
 export class TestQuickOpenService implements IQuickOpenService {
 	public _serviceBrand: any;
@@ -56,18 +56,23 @@ export class TestQuickOpenService implements IQuickOpenService {
 	}
 
 	public dispose() { }
-	public quickNavigate(): void { }
+	public navigate(): void { }
 }
 
 suite('Workbench QuickOpen', () => {
 
+	class TestHandler extends QuickOpenHandler {
+
+	}
+
 	test('QuickOpen Handler and Registry', () => {
 		let registry = (<IQuickOpenRegistry>Registry.as(QuickOpenExtensions.Quickopen));
 		let handler = new QuickOpenHandlerDescriptor(
-			'test',
-			'TestHandler',
+			TestHandler,
+			'testhandler',
 			',',
-			'Handler'
+			'Handler',
+			null
 		);
 
 		registry.registerQuickOpenHandler(handler);

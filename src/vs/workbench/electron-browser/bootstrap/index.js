@@ -9,31 +9,21 @@
 
 /*global window,document,define*/
 
+const perf = require('../../../base/common/performance');
+perf.mark('renderer/started');
+
 const path = require('path');
 const electron = require('electron');
 const remote = electron.remote;
 const ipc = electron.ipcRenderer;
 
-
 process.lazyEnv = new Promise(function (resolve) {
-
-	const origEnv = process.env;
-
-	// warn about missing environment variables
-	// while we are resolve lazyEnv
-	process.env = new Proxy(origEnv, {
-		get: function (target, name) {
-			const result = target[name];
-			if (typeof result === 'undefined') {
-				console.warn('process.env[\'' + name + '\'] is undefined AND \'process.lazyEnv\' is NOT READY yet.');
-			}
-			return result;
-		}
-	});
-
+	const handle = setTimeout(function () {
+		resolve();
+		console.warn('renderer did not receive lazyEnv in time');
+	}, 10000);
 	ipc.once('vscode:acceptShellEnv', function (event, shellEnv) {
-		// store process.env, mixin shellEnv, done
-		process.env = origEnv;
+		clearTimeout(handle);
 		assign(process.env, shellEnv);
 		resolve(process.env);
 	});
@@ -65,15 +55,6 @@ function parseURLQueryArgs() {
 		.map(function (param) { return param.split('='); })
 		.filter(function (param) { return param.length === 2; })
 		.reduce(function (r, param) { r[param[0]] = decodeURIComponent(param[1]); return r; }, {});
-}
-
-function createScript(src, onload) {
-	const script = document.createElement('script');
-	script.src = src;
-	script.addEventListener('load', onload);
-
-	const head = document.getElementsByTagName('head')[0];
-	head.insertBefore(script, head.lastChild);
 }
 
 function uriFromPath(_path) {
@@ -114,14 +95,14 @@ function registerListeners(enableDeveloperTools) {
 		window.addEventListener('keydown', listener);
 	}
 
-	process.on('uncaughtException', function (error) { onError(error, enableDeveloperTools) });
+	process.on('uncaughtException', function (error) { onError(error, enableDeveloperTools); });
 
 	return function () {
 		if (listener) {
 			window.removeEventListener('keydown', listener);
 			listener = void 0;
 		}
-	}
+	};
 }
 
 function main() {
@@ -131,6 +112,7 @@ function main() {
 
 	// Correctly inherit the parent's environment
 	assign(process.env, configuration.userEnv);
+	perf.importEntries(configuration.perfEntries);
 
 	// Get the nls configuration into the process.env as early as possible.
 	var nlsConfig = { availableLanguages: {} };
@@ -151,81 +133,74 @@ function main() {
 
 	window.document.documentElement.setAttribute('lang', locale);
 
-	const enableDeveloperTools = process.env['VSCODE_DEV'] || !!configuration.extensionDevelopmentPath;
+	const enableDeveloperTools = (process.env['VSCODE_DEV'] || !!configuration.extensionDevelopmentPath) && !configuration.extensionTestsPath;
 	const unbind = registerListeners(enableDeveloperTools);
 
 	// disable pinch zoom & apply zoom level early to avoid glitches
 	const zoomLevel = configuration.zoomLevel;
-	webFrame.setZoomLevelLimits(1, 1);
+	webFrame.setVisualZoomLevelLimits(1, 1);
 	if (typeof zoomLevel === 'number' && zoomLevel !== 0) {
 		webFrame.setZoomLevel(zoomLevel);
 	}
 
-	// Handle high contrast mode
-	if (configuration.highContrast) {
-		var themeStorageKey = 'storage://global/workbench.theme';
-		var hcTheme = 'hc-black vscode-theme-defaults-themes-hc_black-json';
-		if (window.localStorage.getItem(themeStorageKey) !== hcTheme) {
-			window.localStorage.setItem(themeStorageKey, hcTheme);
-			window.document.body.className = 'monaco-shell ' + hcTheme;
-		}
+	// Load the loader and start loading the workbench
+	const loaderFilename = configuration.appRoot + '/out/vs/loader.js';
+	const loaderSource = require('fs').readFileSync(loaderFilename);
+	require('vm').runInThisContext(loaderSource, { filename: loaderFilename });
+
+	window.nodeRequire = require.__$__nodeRequire;
+
+	define('fs', ['original-fs'], function (originalFS) { return originalFS; }); // replace the patched electron fs with the original node fs for all AMD code
+
+	window.MonacoEnvironment = {};
+
+	const onNodeCachedData = window.MonacoEnvironment.onNodeCachedData = [];
+	require.config({
+		baseUrl: uriFromPath(configuration.appRoot) + '/out',
+		'vs/nls': nlsConfig,
+		recordStats: !!configuration.performance,
+		nodeCachedDataDir: configuration.nodeCachedDataDir,
+		onNodeCachedData: function () { onNodeCachedData.push(arguments); },
+		nodeModules: [/*BUILD->INSERT_NODE_MODULES*/]
+	});
+
+	if (nlsConfig.pseudo) {
+		require(['vs/nls'], function (nlsPlugin) {
+			nlsPlugin.setPseudoTranslation(nlsConfig.pseudo);
+		});
 	}
 
-	// Load the loader and start loading the workbench
-	const rootUrl = uriFromPath(configuration.appRoot) + '/out';
+	// Perf Counters
+	const timers = window.MonacoEnvironment.timers = {
+		isInitialStartup: !!configuration.isInitialStartup,
+		hasAccessibilitySupport: !!configuration.accessibilitySupport,
+		start: configuration.perfStartTime,
+		appReady: configuration.perfAppReady,
+		windowLoad: configuration.perfWindowLoadTime,
+		beforeLoadWorkbenchMain: Date.now()
+	};
 
-	// In the bundled version the nls plugin is packaged with the loader so the NLS Plugins
-	// loads as soon as the loader loads. To be able to have pseudo translation
-	createScript(rootUrl + '/vs/loader.js', function () {
-		define('fs', ['original-fs'], function (originalFS) { return originalFS; }); // replace the patched electron fs with the original node fs for all AMD code
+	const workbenchMainClock = perf.time('loadWorkbenchMain');
+	require([
+		'vs/workbench/workbench.main',
+		'vs/nls!vs/workbench/workbench.main',
+		'vs/css!vs/workbench/workbench.main'
+	], function () {
+		workbenchMainClock.stop();
+		timers.afterLoadWorkbenchMain = Date.now();
 
-		window.MonacoEnvironment = {};
-
-		const nodeCachedDataErrors = window.MonacoEnvironment.nodeCachedDataErrors = [];
-		require.config({
-			baseUrl: rootUrl,
-			'vs/nls': nlsConfig,
-			recordStats: !!configuration.performance,
-			nodeCachedDataDir: configuration.nodeCachedDataDir,
-			onNodeCachedDataError: function (err) { nodeCachedDataErrors.push(err) },
-			nodeModules: [/*BUILD->INSERT_NODE_MODULES*/]
-		});
-
-		if (nlsConfig.pseudo) {
-			require(['vs/nls'], function (nlsPlugin) {
-				nlsPlugin.setPseudoTranslation(nlsConfig.pseudo);
-			});
-		}
-
-		// Perf Counters
-		const timers = window.MonacoEnvironment.timers = {
-			isInitialStartup: !!configuration.isInitialStartup,
-			hasAccessibilitySupport: !!configuration.accessibilitySupport,
-			start: new Date(configuration.perfStartTime),
-			windowLoad: new Date(configuration.perfWindowLoadTime),
-			beforeLoadWorkbenchMain: new Date()
-		};
-
-		require([
-			'vs/workbench/electron-browser/workbench.main',
-			'vs/nls!vs/workbench/electron-browser/workbench.main',
-			'vs/css!vs/workbench/electron-browser/workbench.main'
-		], function () {
-			timers.afterLoadWorkbenchMain = new Date();
-
-			process.lazyEnv.then(function () {
-
-				require('vs/workbench/electron-browser/main')
-					.startup(configuration)
-					.done(function () {
-						unbind(); // since the workbench is running, unbind our developer related listeners and let the workbench handle them
-					}, function (error) {
-						onError(error, enableDeveloperTools);
-					});
-			});
-
+		process.lazyEnv.then(function () {
+			perf.mark('main/startup');
+			require('vs/workbench/electron-browser/main')
+				.startup(configuration)
+				.done(function () {
+					unbind(); // since the workbench is running, unbind our developer related listeners and let the workbench handle them
+				}, function (error) {
+					onError(error, enableDeveloperTools);
+				});
 		});
 	});
+
 }
 
 main();

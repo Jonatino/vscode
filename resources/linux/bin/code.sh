@@ -5,15 +5,14 @@
 
 # If root, ensure that --user-data-dir is specified
 if [ "$(id -u)" = "0" ]; then
-	while test $# -gt 0
+	for i in $@
 	do
-		if [[ $1 == --user-data-dir=* ]]; then
+		if [[ $i == --user-data-dir=* ]]; then
 			DATA_DIR_SET=1
 		fi
-		shift
 	done
 	if [ -z $DATA_DIR_SET ]; then
-		echo "It is recommended to start vscode as a normal user. To run as root, you must specify an alternate user data directory with the --user-data-dir argument." 1>&2
+		echo "You are trying to start vscode as a super user which is not recommended. If you really want to, you must specify an alternate user data directory using the --user-data-dir argument." 1>&2
 		exit 1
 	fi
 fi

@@ -6,8 +6,8 @@
 import 'vs/css!./list';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import { range } from 'vs/base/common/arrays';
-import { IDelegate, IRenderer, IFocusChangeEvent, ISelectionChangeEvent } from './list';
-import { List, IListOptions } from './listWidget';
+import { IDelegate, IRenderer, IListEvent } from './list';
+import { List, IListOptions, IListStyles } from './listWidget';
 import { IPagedModel } from 'vs/base/common/paging';
 import Event, { mapEvent } from 'vs/base/common/event';
 
@@ -62,24 +62,47 @@ export class PagedList<T> {
 
 	private list: List<number>;
 	private _model: IPagedModel<T>;
-	get onDOMFocus(): Event<FocusEvent> { return this.list.onDOMFocus; }
 
 	constructor(
 		container: HTMLElement,
 		delegate: IDelegate<number>,
 		renderers: IPagedRenderer<T, any>[],
-		options: IListOptions = {}
+		options: IListOptions<any> = {} // TODO@Joao: should be IListOptions<T>
 	) {
 		const pagedRenderers = renderers.map(r => new PagedRenderer<T, ITemplateData<T>>(r, () => this.model));
 		this.list = new List(container, delegate, pagedRenderers, options);
 	}
 
-	get onFocusChange(): Event<IFocusChangeEvent<T>> {
+	getHTMLElement(): HTMLElement {
+		return this.list.getHTMLElement();
+	}
+
+	isDOMFocused(): boolean {
+		return this.list.getHTMLElement() === document.activeElement;
+	}
+
+	get onDidFocus(): Event<void> {
+		return this.list.onDidFocus;
+	}
+
+	get onDidBlur(): Event<void> {
+		return this.list.onDidBlur;
+	}
+
+	get widget(): List<number> {
+		return this.list;
+	}
+
+	get onFocusChange(): Event<IListEvent<T>> {
 		return mapEvent(this.list.onFocusChange, ({ elements, indexes }) => ({ elements: elements.map(e => this._model.get(e)), indexes }));
 	}
 
-	get onSelectionChange(): Event<ISelectionChangeEvent<T>> {
+	get onSelectionChange(): Event<IListEvent<T>> {
 		return mapEvent(this.list.onSelectionChange, ({ elements, indexes }) => ({ elements: elements.map(e => this._model.get(e)), indexes }));
+	}
+
+	get onPin(): Event<IListEvent<T>> {
+		return mapEvent(this.list.onPin, ({ elements, indexes }) => ({ elements: elements.map(e => this._model.get(e)), indexes }));
 	}
 
 	get model(): IPagedModel<T> {
@@ -88,7 +111,11 @@ export class PagedList<T> {
 
 	set model(model: IPagedModel<T>) {
 		this._model = model;
-		this.list.splice(0, this.list.length, ...range(model.length));
+		this.list.splice(0, this.list.length, range(model.length));
+	}
+
+	get length(): number {
+		return this.list.length;
 	}
 
 	get scrollTop(): number {
@@ -97,6 +124,14 @@ export class PagedList<T> {
 
 	set scrollTop(scrollTop: number) {
 		this.list.scrollTop = scrollTop;
+	}
+
+	open(indexes: number[]): void {
+		this.list.open(indexes);
+	}
+
+	setFocus(indexes: number[]): void {
+		this.list.setFocus(indexes);
 	}
 
 	focusNext(n?: number, loop?: boolean): void {
@@ -127,8 +162,8 @@ export class PagedList<T> {
 		return this.list.getFocus();
 	}
 
-	setSelection(...indexes: number[]): void {
-		this.list.setSelection(...indexes);
+	setSelection(indexes: number[]): void {
+		this.list.setSelection(indexes);
 	}
 
 	layout(height?: number): void {
@@ -137,5 +172,9 @@ export class PagedList<T> {
 
 	reveal(index: number, relativeTop?: number): void {
 		this.list.reveal(index, relativeTop);
+	}
+
+	style(styles: IListStyles): void {
+		this.list.style(styles);
 	}
 }

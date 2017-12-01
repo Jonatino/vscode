@@ -3,51 +3,41 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IEnvironmentService, ParsedArgs } from 'vs/platform/environment/common/environment';
+import { IEnvironmentService, ParsedArgs, IDebugParams, IExtensionHostDebugParams } from 'vs/platform/environment/common/environment';
 import * as crypto from 'crypto';
 import * as paths from 'vs/base/node/paths';
 import * as os from 'os';
 import * as path from 'path';
+import * as fs from 'fs';
 import URI from 'vs/base/common/uri';
+import { generateUuid, isUUID } from 'vs/base/common/uuid';
 import { memoize } from 'vs/base/common/decorators';
 import pkg from 'vs/platform/node/package';
 import product from 'vs/platform/node/product';
 
-function getUniqueUserId(): string {
-	let username: string;
+// Read this before there's any chance it is overwritten
+// Related to https://github.com/Microsoft/vscode/issues/30624
+const xdgRuntimeDir = process.env['XDG_RUNTIME_DIR'];
+
+function getNixIPCHandle(userDataPath: string, type: string): string {
+	if (xdgRuntimeDir) {
+		return path.join(xdgRuntimeDir, `${pkg.name}-${pkg.version}-${type}.sock`);
+	}
+
+	return path.join(userDataPath, `${pkg.version}-${type}.sock`);
+}
+
+function getWin32IPCHandle(userDataPath: string, type: string): string {
+	const scope = crypto.createHash('md5').update(userDataPath).digest('hex');
+	return `\\\\.\\pipe\\${scope}-${pkg.version}-${type}-sock`;
+}
+
+function getIPCHandle(userDataPath: string, type: string): string {
 	if (process.platform === 'win32') {
-		username = process.env.USERNAME;
+		return getWin32IPCHandle(userDataPath, type);
 	} else {
-		username = process.env.USER;
+		return getNixIPCHandle(userDataPath, type);
 	}
-
-	if (!username) {
-		return ''; // fail gracefully if there is no user name
-	}
-
-	// use sha256 to ensure the userid value can be used in filenames and are unique
-	return crypto.createHash('sha256').update(username).digest('hex').substr(0, 6);
-}
-
-function getIPCHandlePrefix(): string {
-	let name = pkg.name;
-
-	// Support to run VS Code multiple times as different user
-	// by making the socket unique over the logged in user
-	let userId = getUniqueUserId();
-	if (userId) {
-		name += `-${userId}`;
-	}
-
-	if (process.platform === 'win32') {
-		return `\\\\.\\pipe\\${name}`;
-	}
-
-	return path.join(os.tmpdir(), name);
-}
-
-function getIPCHandleSuffix(): string {
-	return process.platform === 'win32' ? '-sock' : '.sock';
 }
 
 export class EnvironmentService implements IEnvironmentService {
@@ -65,9 +55,6 @@ export class EnvironmentService implements IEnvironmentService {
 	get userHome(): string { return os.homedir(); }
 
 	@memoize
-	get userProductHome(): string { return path.join(this.userHome, product.dataFolderName); }
-
-	@memoize
 	get userDataPath(): string { return parseUserDataDir(this._args, process); }
 
 	get appNameLong(): string { return product.nameLong; }
@@ -79,6 +66,12 @@ export class EnvironmentService implements IEnvironmentService {
 
 	@memoize
 	get appSettingsPath(): string { return path.join(this.appSettingsHome, 'settings.json'); }
+
+	@memoize
+	get settingsSearchBuildId(): number { return product.settingsSearchBuildId; }
+
+	@memoize
+	get settingsSearchUrl(): string { return product.settingsSearchUrl; }
 
 	@memoize
 	get appKeybindingsPath(): string { return path.join(this.appSettingsHome, 'keybindings.json'); }
@@ -93,7 +86,13 @@ export class EnvironmentService implements IEnvironmentService {
 	get backupWorkspacesPath(): string { return path.join(this.backupHome, 'workspaces.json'); }
 
 	@memoize
-	get extensionsPath(): string { return path.normalize(this._args['extensions-dir'] || path.join(this.userProductHome, 'extensions')); }
+	get workspacesHome(): string { return path.join(this.userDataPath, 'Workspaces'); }
+
+	@memoize
+	get installSourcePath(): string { return path.join(this.userDataPath, 'installSource'); }
+
+	@memoize
+	get extensionsPath(): string { return parsePathArg(this._args['extensions-dir'], process) || process.env['VSCODE_EXTENSIONS'] || path.join(this.userHome, product.dataFolderName, 'extensions'); }
 
 	@memoize
 	get extensionDevelopmentPath(): string { return this._args.extensionDevelopmentPath ? path.normalize(this._args.extensionDevelopmentPath) : this._args.extensionDevelopmentPath; }
@@ -103,45 +102,89 @@ export class EnvironmentService implements IEnvironmentService {
 
 	get disableExtensions(): boolean { return this._args['disable-extensions']; }
 
+	get skipGettingStarted(): boolean { return this._args['skip-getting-started']; }
+
+	get skipAddToRecentlyOpened(): boolean { return this._args['skip-add-to-recently-opened']; }
+
 	@memoize
-	get debugExtensionHost(): { port: number; break: boolean; } { return parseExtensionHostPort(this._args, this.isBuilt); }
+	get debugExtensionHost(): IExtensionHostDebugParams { return parseExtensionHostPort(this._args, this.isBuilt); }
+
+	@memoize
+	get debugSearch(): IDebugParams { return parseSearchPort(this._args, this.isBuilt); }
 
 	get isBuilt(): boolean { return !process.env['VSCODE_DEV']; }
 	get verbose(): boolean { return this._args.verbose; }
 	get wait(): boolean { return this._args.wait; }
-	get performance(): boolean { return this._args.performance; }
 	get logExtensionHostCommunication(): boolean { return this._args.logExtensionHostCommunication; }
 
-	@memoize
-	get mainIPCHandle(): string { return `${getIPCHandlePrefix()}-${pkg.version}${getIPCHandleSuffix()}`; }
+	get performance(): boolean { return this._args.performance; }
 
 	@memoize
-	get sharedIPCHandle(): string { return `${getIPCHandlePrefix()}-${pkg.version}-shared${getIPCHandleSuffix()}`; }
+	get mainIPCHandle(): string { return getIPCHandle(this.userDataPath, 'main'); }
 
 	@memoize
-	get nodeCachedDataDir(): string { return path.join(this.userDataPath, 'CachedData'); }
+	get sharedIPCHandle(): string { return getIPCHandle(this.userDataPath, 'shared'); }
 
-	constructor(private _args: ParsedArgs, private _execPath: string) { }
-}
+	@memoize
+	get nodeCachedDataDir(): string { return this.isBuilt ? path.join(this.userDataPath, 'CachedData', product.commit || new Array(41).join('0')) : undefined; }
 
-export function parseExtensionHostPort(args: ParsedArgs, isBuild: boolean): { port: number; break: boolean; } {
-	const portStr = args.debugBrkPluginHost || args.debugPluginHost;
-	const port = Number(portStr) || (!isBuild ? 5870 : null);
-	const brk = port ? Boolean(!!args.debugBrkPluginHost) : false;
-	return { port, break: brk };
-}
+	get disableUpdates(): boolean { return !!this._args['disable-updates']; }
+	get disableCrashReporter(): boolean { return !!this._args['disable-crash-reporter']; }
 
-export function parseUserDataDir(args: ParsedArgs, process: NodeJS.Process) {
-	const arg = args['user-data-dir'];
-	if (arg) {
-		// Determine if the arg is relative or absolute, if relative use the original CWD
-		// (VSCODE_CWD), not the potentially overridden one (process.cwd()).
-		const resolved = path.resolve(arg);
-		if (path.normalize(arg) === resolved) {
-			return resolved;
-		} else {
-			return path.resolve(process.env['VSCODE_CWD'] || process.cwd(), arg);
+	readonly machineUUID: string;
+
+	constructor(private _args: ParsedArgs, private _execPath: string) {
+		const machineIdPath = path.join(this.userDataPath, 'machineid');
+
+		try {
+			this.machineUUID = fs.readFileSync(machineIdPath, 'utf8');
+
+			if (!isUUID(this.machineUUID)) {
+				throw new Error('Not a UUID');
+			}
+		} catch (err) {
+			this.machineUUID = generateUuid();
+
+			try {
+				fs.writeFileSync(machineIdPath, this.machineUUID, 'utf8');
+			} catch (err) {
+				// noop
+			}
 		}
 	}
-	return path.resolve(paths.getDefaultUserDataPath(process.platform));
+}
+
+export function parseExtensionHostPort(args: ParsedArgs, isBuild: boolean): IExtensionHostDebugParams {
+	return parseDebugPort(args.debugPluginHost, args.debugBrkPluginHost, 5870, args.debugId);
+}
+
+export function parseSearchPort(args: ParsedArgs, isBuild: boolean): IDebugParams {
+	return parseDebugPort(args.debugSearch, args.debugBrkSearch, !isBuild ? 5876 : null);
+}
+
+export function parseDebugPort(debugArg: string, debugBrkArg: string, defaultBuildPort: number, debugId?: string): IExtensionHostDebugParams {
+	const portStr = debugBrkArg || debugArg;
+	const port = Number(portStr) || defaultBuildPort;
+	const brk = port ? Boolean(!!debugBrkArg) : false;
+	return { port, break: brk, debugId };
+}
+
+function parsePathArg(arg: string, process: NodeJS.Process): string {
+	if (!arg) {
+		return undefined;
+	}
+
+	// Determine if the arg is relative or absolute, if relative use the original CWD
+	// (VSCODE_CWD), not the potentially overridden one (process.cwd()).
+	const resolved = path.resolve(arg);
+
+	if (path.normalize(arg) === resolved) {
+		return resolved;
+	} else {
+		return path.resolve(process.env['VSCODE_CWD'] || process.cwd(), arg);
+	}
+}
+
+export function parseUserDataDir(args: ParsedArgs, process: NodeJS.Process): string {
+	return parsePathArg(args['user-data-dir'], process) || path.resolve(paths.getDefaultUserDataPath(process.platform));
 }

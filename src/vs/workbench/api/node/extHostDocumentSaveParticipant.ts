@@ -5,46 +5,40 @@
 'use strict';
 
 import Event from 'vs/base/common/event';
-import CallbackList from 'vs/base/common/callbackList';
 import URI from 'vs/base/common/uri';
 import { sequence, always } from 'vs/base/common/async';
 import { illegalState } from 'vs/base/common/errors';
 import { TPromise } from 'vs/base/common/winjs.base';
-import { MainThreadWorkspaceShape, ExtHostDocumentSaveParticipantShape } from 'vs/workbench/api/node/extHost.protocol';
+import { ExtHostDocumentSaveParticipantShape, MainThreadEditorsShape, IWorkspaceResourceEdit } from 'vs/workbench/api/node/extHost.protocol';
 import { TextEdit } from 'vs/workbench/api/node/extHostTypes';
-import { fromRange, TextDocumentSaveReason } from 'vs/workbench/api/node/extHostTypeConverters';
-import { IResourceEdit } from 'vs/editor/common/services/bulkEdit';
+import { fromRange, TextDocumentSaveReason, EndOfLine } from 'vs/workbench/api/node/extHostTypeConverters';
 import { ExtHostDocuments } from 'vs/workbench/api/node/extHostDocuments';
 import { SaveReason } from 'vs/workbench/services/textfile/common/textfiles';
 import * as vscode from 'vscode';
+import { LinkedList } from 'vs/base/common/linkedList';
 
-export class ExtHostDocumentSaveParticipant extends ExtHostDocumentSaveParticipantShape {
+export class ExtHostDocumentSaveParticipant implements ExtHostDocumentSaveParticipantShape {
 
 	private _documents: ExtHostDocuments;
-	private _workspace: MainThreadWorkspaceShape;
-	private _callbacks = new CallbackList();
+	private _mainThreadEditors: MainThreadEditorsShape;
+	private _callbacks = new LinkedList<[Function, any]>();
 	private _badListeners = new WeakMap<Function, number>();
 	private _thresholds: { timeout: number; errors: number; };
 
-	constructor(documents: ExtHostDocuments, workspace: MainThreadWorkspaceShape, thresholds: { timeout: number; errors: number; } = { timeout: 1500, errors: 3 }) {
-		super();
+	constructor(documents: ExtHostDocuments, mainThreadEditors: MainThreadEditorsShape, thresholds: { timeout: number; errors: number; } = { timeout: 1500, errors: 3 }) {
 		this._documents = documents;
-		this._workspace = workspace;
+		this._mainThreadEditors = mainThreadEditors;
 		this._thresholds = thresholds;
 	}
 
 	dispose(): void {
-		this._callbacks.dispose();
+		this._callbacks.clear();
 	}
 
 	get onWillSaveTextDocumentEvent(): Event<vscode.TextDocumentWillSaveEvent> {
 		return (listener, thisArg, disposables) => {
-			this._callbacks.add(listener, thisArg);
-			const result = {
-				dispose: () => {
-					this._callbacks.remove(listener, thisArg);
-				}
-			};
+			const remove = this._callbacks.push([listener, thisArg]);
+			const result = { dispose: remove };
 			if (Array.isArray(disposables)) {
 				disposables.push(result);
 			}
@@ -53,7 +47,7 @@ export class ExtHostDocumentSaveParticipant extends ExtHostDocumentSaveParticipa
 	}
 
 	$participateInSave(resource: URI, reason: SaveReason): TPromise<boolean[]> {
-		const entries = this._callbacks.entries();
+		const entries = this._callbacks.toArray();
 
 		let didTimeout = false;
 		let didTimeoutHandle = setTimeout(() => didTimeout = true, this._thresholds.timeout);
@@ -63,7 +57,7 @@ export class ExtHostDocumentSaveParticipant extends ExtHostDocumentSaveParticipa
 
 				if (didTimeout) {
 					// timeout - no more listeners
-					return;
+					return undefined;
 				}
 
 				const document = this._documents.getDocumentData(resource).document;
@@ -101,10 +95,10 @@ export class ExtHostDocumentSaveParticipant extends ExtHostDocumentSaveParticipa
 
 	private _deliverEventAsync(listener: Function, thisArg: any, stubEvent: vscode.TextDocumentWillSaveEvent): TPromise<any> {
 
-		const promises: TPromise<any | vscode.TextEdit[]>[] = [];
+		const promises: TPromise<vscode.TextEdit[]>[] = [];
 
-		const {document, reason} = stubEvent;
-		const {version} = document;
+		const { document, reason } = stubEvent;
+		const { version } = document;
 
 		const event = Object.freeze(<vscode.TextDocumentWillSaveEvent>{
 			document,
@@ -127,34 +121,38 @@ export class ExtHostDocumentSaveParticipant extends ExtHostDocumentSaveParticipa
 		// freeze promises after event call
 		Object.freeze(promises);
 
-		return new TPromise<any[]>((resolve, reject) => {
+		return new TPromise<vscode.TextEdit[][]>((resolve, reject) => {
 			// join on all listener promises, reject after timeout
 			const handle = setTimeout(() => reject(new Error('timeout')), this._thresholds.timeout);
 			return always(TPromise.join(promises), () => clearTimeout(handle)).then(resolve, reject);
 
 		}).then(values => {
 
-			const edits: IResourceEdit[] = [];
+			let workspaceResourceEdit: IWorkspaceResourceEdit = {
+				resource: document.uri,
+				edits: []
+			};
+
 			for (const value of values) {
 				if (Array.isArray(value) && (<vscode.TextEdit[]>value).every(e => e instanceof TextEdit)) {
-					for (const {newText, range} of value) {
-						edits.push({
-							resource: <URI>document.uri,
-							range: fromRange(range),
-							newText
+					for (const { newText, newEol, range } of value) {
+						workspaceResourceEdit.edits.push({
+							range: range && fromRange(range),
+							newText,
+							newEol: EndOfLine.from(newEol)
 						});
 					}
 				}
 			}
 
-			// apply edits iff any and iff document
+			// apply edits if any and if document
 			// didn't change somehow in the meantime
-			if (edits.length === 0) {
-				return;
+			if (workspaceResourceEdit.edits.length === 0) {
+				return undefined;
 			}
 
 			if (version === document.version) {
-				return this._workspace.$applyWorkspaceEdit(edits);
+				return this._mainThreadEditors.$tryApplyWorkspaceEdit([workspaceResourceEdit]);
 			}
 
 			// TODO@joh bubble this to listener?

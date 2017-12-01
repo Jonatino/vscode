@@ -11,6 +11,7 @@
 			"id": "yaml",
 			"aliases": ["YAML", "yaml"],
 			"extensions": [".eyaml", ".eyml", ".yaml", ".yml"],
+			"filenames": [ "yarn.lock" ],
 			"firstLine": "^#cloud-config",
 			"configuration": "./language-configuration.json"
 		}],
@@ -18,6 +19,12 @@
 			"language": "yaml",
 			"scopeName": "source.yaml",
 			"path": "./syntaxes/yaml.json"
-		}]
+		}],
+		"configurationDefaults": {
+			"[yaml]": {
+				"editor.insertSpaces": true,
+				"editor.tabSize": 2
+			}
+		}
 	}
 }

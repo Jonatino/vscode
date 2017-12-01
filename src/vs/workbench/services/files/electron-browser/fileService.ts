@@ -11,50 +11,45 @@ import paths = require('vs/base/common/paths');
 import encoding = require('vs/base/node/encoding');
 import errors = require('vs/base/common/errors');
 import uri from 'vs/base/common/uri';
-import { toResource } from 'vs/workbench/common/editor';
-import { FileOperation, FileOperationEvent, IFileService, IFilesConfiguration, IResolveFileOptions, IFileStat, IContent, IStreamContent, IImportResult, IResolveContentOptions, IUpdateContentOptions, FileChangesEvent } from 'vs/platform/files/common/files';
+import { FileOperation, FileOperationEvent, IFileService, IFilesConfiguration, IResolveFileOptions, IFileStat, IResolveFileResult, IContent, IStreamContent, IImportResult, IResolveContentOptions, IUpdateContentOptions, FileChangesEvent, ICreateFileOptions } from 'vs/platform/files/common/files';
 import { FileService as NodeFileService, IFileServiceOptions, IEncodingOverride } from 'vs/workbench/services/files/node/fileService';
-import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
+import { IConfigurationService, IConfigurationChangeEvent } from 'vs/platform/configuration/common/configuration';
 import { IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { Action } from 'vs/base/common/actions';
-import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IMessageService, IMessageWithAction, Severity, CloseAction } from 'vs/platform/message/common/message';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { IEditorGroupService } from 'vs/workbench/services/group/common/groupService';
 import { ILifecycleService } from 'vs/platform/lifecycle/common/lifecycle';
 import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
 import Event, { Emitter } from 'vs/base/common/event';
 
 import { shell } from 'electron';
+import { ITextResourceConfigurationService } from 'vs/editor/common/services/resourceConfiguration';
 
 export class FileService implements IFileService {
 
 	public _serviceBrand: any;
 
 	// If we run with .NET framework < 4.5, we need to detect this error to inform the user
-	private static NET_VERSION_ERROR = 'System.MissingMethodException';
-	private static NET_VERSION_ERROR_IGNORE_KEY = 'ignoreNetVersionError';
+	private static readonly NET_VERSION_ERROR = 'System.MissingMethodException';
+	private static readonly NET_VERSION_ERROR_IGNORE_KEY = 'ignoreNetVersionError';
 
 	private raw: IFileService;
 
 	private toUnbind: IDisposable[];
-	private activeOutOfWorkspaceWatchers: { [resource: string]: boolean; };
 
-	private _onFileChanges: Emitter<FileChangesEvent>;
-	private _onAfterOperation: Emitter<FileOperationEvent>;
+	protected _onFileChanges: Emitter<FileChangesEvent>;
+	protected _onAfterOperation: Emitter<FileOperationEvent>;
 
 	constructor(
 		@IConfigurationService private configurationService: IConfigurationService,
 		@IWorkspaceContextService private contextService: IWorkspaceContextService,
-		@IWorkbenchEditorService private editorService: IWorkbenchEditorService,
-		@IEnvironmentService environmentService: IEnvironmentService,
-		@IEditorGroupService private editorGroupService: IEditorGroupService,
+		@IEnvironmentService private environmentService: IEnvironmentService,
 		@ILifecycleService private lifecycleService: ILifecycleService,
 		@IMessageService private messageService: IMessageService,
-		@IStorageService private storageService: IStorageService
+		@IStorageService private storageService: IStorageService,
+		@ITextResourceConfigurationService textResourceConfigurationService: ITextResourceConfigurationService
 	) {
 		this.toUnbind = [];
-		this.activeOutOfWorkspaceWatchers = Object.create(null);
 
 		this._onFileChanges = new Emitter<FileChangesEvent>();
 		this.toUnbind.push(this._onFileChanges);
@@ -62,14 +57,7 @@ export class FileService implements IFileService {
 		this._onAfterOperation = new Emitter<FileOperationEvent>();
 		this.toUnbind.push(this._onAfterOperation);
 
-		const configuration = this.configurationService.getConfiguration<IFilesConfiguration>();
-
-		// adjust encodings
-		const encodingOverride: IEncodingOverride[] = [];
-		encodingOverride.push({ resource: uri.file(environmentService.appSettingsHome), encoding: encoding.UTF8 });
-		if (this.contextService.hasWorkspace()) {
-			encodingOverride.push({ resource: uri.file(paths.join(this.contextService.getWorkspace().resource.fsPath, '.vscode')), encoding: encoding.UTF8 });
-		}
+		const configuration = this.configurationService.getValue<IFilesConfiguration>();
 
 		let watcherIgnoredPatterns: string[] = [];
 		if (configuration.files && configuration.files.watcherExclude) {
@@ -79,15 +67,14 @@ export class FileService implements IFileService {
 		// build config
 		const fileServiceConfig: IFileServiceOptions = {
 			errorLogger: (msg: string) => this.onFileServiceError(msg),
-			encoding: configuration.files && configuration.files.encoding,
-			encodingOverride: encodingOverride,
-			watcherIgnoredPatterns: watcherIgnoredPatterns,
+			encodingOverride: this.getEncodingOverrides(),
+			watcherIgnoredPatterns,
 			verboseLogging: environmentService.verbose,
+			useExperimentalFileWatcher: configuration.files.useExperimentalFileWatcher
 		};
 
 		// create service
-		const workspace = this.contextService.getWorkspace();
-		this.raw = new NodeFileService(workspace ? workspace.resource.fsPath : void 0, fileServiceConfig);
+		this.raw = new NodeFileService(contextService, textResourceConfigurationService, configurationService, lifecycleService, fileServiceConfig);
 
 		// Listeners
 		this.registerListeners();
@@ -101,7 +88,7 @@ export class FileService implements IFileService {
 		return this._onAfterOperation.event;
 	}
 
-	private onFileServiceError(msg: any): void {
+	private onFileServiceError(msg: string): void {
 		errors.onUnexpectedError(msg);
 
 		// Detect if we run < .NET Framework 4.5
@@ -132,55 +119,45 @@ export class FileService implements IFileService {
 		this.toUnbind.push(this.raw.onAfterOperation(e => this._onAfterOperation.fire(e)));
 
 		// Config changes
-		this.toUnbind.push(this.configurationService.onDidUpdateConfiguration(e => this.onConfigurationChange(e.config)));
+		this.toUnbind.push(this.configurationService.onDidChangeConfiguration(e => this.onConfigurationChange(e)));
 
-		// Editor changing
-		this.toUnbind.push(this.editorGroupService.onEditorsChanged(() => this.onEditorsChanged()));
+		// Root changes
+		this.toUnbind.push(this.contextService.onDidChangeWorkspaceFolders(() => this.onDidChangeWorkspaceFolders()));
 
 		// Lifecycle
 		this.lifecycleService.onShutdown(this.dispose, this);
 	}
 
-	private onEditorsChanged(): void {
-		this.handleOutOfWorkspaceWatchers();
+	private onDidChangeWorkspaceFolders(): void {
+		this.updateOptions({ encodingOverride: this.getEncodingOverrides() });
 	}
 
-	private handleOutOfWorkspaceWatchers(): void {
-		const visibleOutOfWorkspaceResources = this.editorService.getVisibleEditors().map(editor => {
-			return toResource(editor.input, { supportSideBySide: true, filter: 'file' });
-		}).filter(fileResource => {
-			return !!fileResource && !this.contextService.isInsideWorkspace(fileResource);
-		}).map(fileResource => {
-			return fileResource.toString();
+	private getEncodingOverrides(): IEncodingOverride[] {
+		const encodingOverride: IEncodingOverride[] = [];
+		encodingOverride.push({ resource: uri.file(this.environmentService.appSettingsHome), encoding: encoding.UTF8 });
+		this.contextService.getWorkspace().folders.forEach(folder => {
+			encodingOverride.push({ resource: uri.file(paths.join(folder.uri.fsPath, '.vscode')), encoding: encoding.UTF8 });
 		});
 
-		// Handle no longer visible out of workspace resources
-		Object.keys(this.activeOutOfWorkspaceWatchers).forEach(watchedResource => {
-			if (visibleOutOfWorkspaceResources.indexOf(watchedResource) < 0) {
-				this.unwatchFileChanges(watchedResource);
-				delete this.activeOutOfWorkspaceWatchers[watchedResource];
-			}
-		});
-
-		// Handle newly visible out of workspace resources
-		visibleOutOfWorkspaceResources.forEach(resourceToWatch => {
-			if (!this.activeOutOfWorkspaceWatchers[resourceToWatch]) {
-				this.watchFileChanges(uri.parse(resourceToWatch));
-				this.activeOutOfWorkspaceWatchers[resourceToWatch] = true;
-			}
-		});
+		return encodingOverride;
 	}
 
-	private onConfigurationChange(configuration: IFilesConfiguration): void {
-		this.updateOptions(configuration.files);
+	private onConfigurationChange(event: IConfigurationChangeEvent): void {
+		if (event.affectsConfiguration('files.useExperimentalFileWatcher')) {
+			this.updateOptions({ useExperimentalFileWatcher: this.configurationService.getValue<boolean>('files.useExperimentalFileWatcher') });
+		}
 	}
 
-	public updateOptions(options: any): void {
+	public updateOptions(options: object): void {
 		this.raw.updateOptions(options);
 	}
 
 	public resolveFile(resource: uri, options?: IResolveFileOptions): TPromise<IFileStat> {
 		return this.raw.resolveFile(resource, options);
+	}
+
+	public resolveFiles(toResolve: { resource: uri, options?: IResolveFileOptions }[]): TPromise<IResolveFileResult[]> {
+		return this.raw.resolveFiles(toResolve);
 	}
 
 	public existsFile(resource: uri): TPromise<boolean> {
@@ -195,10 +172,6 @@ export class FileService implements IFileService {
 		return this.raw.resolveStreamContent(resource, options);
 	}
 
-	public resolveContents(resources: uri[]): TPromise<IContent[]> {
-		return this.raw.resolveContents(resources);
-	}
-
 	public updateContent(resource: uri, value: string, options?: IUpdateContentOptions): TPromise<IFileStat> {
 		return this.raw.updateContent(resource, value, options);
 	}
@@ -211,8 +184,8 @@ export class FileService implements IFileService {
 		return this.raw.copyFile(source, target, overwrite);
 	}
 
-	public createFile(resource: uri, content?: string): TPromise<IFileStat> {
-		return this.raw.createFile(resource, content);
+	public createFile(resource: uri, content?: string, options?: ICreateFileOptions): TPromise<IFileStat> {
+		return this.raw.createFile(resource, content, options);
 	}
 
 	public createFolder(resource: uri): TPromise<IFileStat> {
@@ -236,11 +209,6 @@ export class FileService implements IFileService {
 	}
 
 	private doMoveItemToTrash(resource: uri): TPromise<void> {
-		const workspace = this.contextService.getWorkspace();
-		if (!workspace) {
-			return TPromise.wrapError<void>('Need a workspace to use this');
-		}
-
 		const absolutePath = resource.fsPath;
 		const result = shell.moveItemToTrash(absolutePath);
 		if (!result) {
@@ -278,24 +246,16 @@ export class FileService implements IFileService {
 		this.raw.watchFileChanges(resource);
 	}
 
-	public unwatchFileChanges(resource: uri): void;
-	public unwatchFileChanges(path: string): void;
-	public unwatchFileChanges(arg1: any): void {
-		this.raw.unwatchFileChanges(arg1);
+	public unwatchFileChanges(resource: uri): void {
+		this.raw.unwatchFileChanges(resource);
 	}
 
-	public getEncoding(resource: uri): string {
-		return this.raw.getEncoding(resource);
+	public getEncoding(resource: uri, preferredEncoding?: string): string {
+		return this.raw.getEncoding(resource, preferredEncoding);
 	}
 
 	public dispose(): void {
 		this.toUnbind = dispose(this.toUnbind);
-
-		// Dispose watchers if any
-		for (const key in this.activeOutOfWorkspaceWatchers) {
-			this.unwatchFileChanges(key);
-		}
-		this.activeOutOfWorkspaceWatchers = Object.create(null);
 
 		// Dispose service
 		this.raw.dispose();

@@ -15,22 +15,24 @@ import { IEntryRunContext, Mode, IAutoFocus } from 'vs/base/parts/quickopen/comm
 import { QuickOpenModel, IHighlight } from 'vs/base/parts/quickopen/browser/quickOpenModel';
 import { QuickOpenHandler, EditorQuickOpenEntryGroup, QuickOpenAction } from 'vs/workbench/browser/quickopen';
 import filters = require('vs/base/common/filters');
-import { KeyMod } from 'vs/base/common/keyCodes';
-import { IEditor, IModelDecorationsChangeAccessor, OverviewRulerLane, IModelDeltaDecoration, IRange, IModel, ITokenizedModel, IDiffEditorModel, IEditorViewState } from 'vs/editor/common/editorCommon';
+import { IEditor, IModelDecorationsChangeAccessor, OverviewRulerLane, IModelDeltaDecoration, IModel, ITokenizedModel, IDiffEditorModel, IEditorViewState, ScrollType } from 'vs/editor/common/editorCommon';
 import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
 import { IQuickOpenService } from 'vs/platform/quickOpen/common/quickOpen';
 import { Position, IEditorInput, ITextEditorOptions } from 'vs/platform/editor/common/editor';
-import { getDocumentSymbols } from 'vs/editor/contrib/quickOpen/common/quickOpen';
-import { DocumentSymbolProviderRegistry, SymbolInformation, SymbolKind } from 'vs/editor/common/modes';
-import { getCodeEditor } from 'vs/editor/common/services/codeEditorService';
+import { getDocumentSymbols } from 'vs/editor/contrib/quickOpen/quickOpen';
+import { DocumentSymbolProviderRegistry, SymbolInformation, symbolKindToCssClass } from 'vs/editor/common/modes';
+import { getCodeEditor } from 'vs/editor/browser/services/codeEditorService';
+import { IRange } from 'vs/editor/common/core/range';
+import { themeColorFromId } from 'vs/platform/theme/common/themeService';
+import { overviewRulerRangeHighlight } from 'vs/editor/common/view/editorColorRegistry';
 
 export const GOTO_SYMBOL_PREFIX = '@';
 export const SCOPE_PREFIX = ':';
 
 export class GotoSymbolAction extends QuickOpenAction {
 
-	public static ID = 'workbench.action.gotoSymbol';
-	public static LABEL = nls.localize('gotoSymbol', "Go to Symbol in File...");
+	public static readonly ID = 'workbench.action.gotoSymbol';
+	public static readonly LABEL = nls.localize('gotoSymbol', "Go to Symbol in File...");
 
 	constructor(actionId: string, actionLabel: string, @IQuickOpenService quickOpenService: IQuickOpenService) {
 		super(actionId, actionLabel, GOTO_SYMBOL_PREFIX, quickOpenService);
@@ -291,9 +293,10 @@ class SymbolEntry extends EditorQuickOpenEntryGroup {
 		return this.editorService.getActiveEditorInput();
 	}
 
-	public getOptions(): ITextEditorOptions {
+	public getOptions(pinned?: boolean): ITextEditorOptions {
 		return {
-			selection: this.toSelection()
+			selection: this.toSelection(),
+			pinned
 		};
 	}
 
@@ -308,9 +311,9 @@ class SymbolEntry extends EditorQuickOpenEntryGroup {
 	private runOpen(context: IEntryRunContext): boolean {
 
 		// Check for sideBySide use
-		const sideBySide = context.keymods.indexOf(KeyMod.CtrlCmd) >= 0;
+		const sideBySide = context.keymods.ctrlCmd;
 		if (sideBySide) {
-			this.editorService.openEditor(this.getInput(), this.getOptions(), true).done(null, errors.onUnexpectedError);
+			this.editorService.openEditor(this.getInput(), this.getOptions(context.keymods.alt), true).done(null, errors.onUnexpectedError);
 		}
 
 		// Apply selection and focus
@@ -320,7 +323,7 @@ class SymbolEntry extends EditorQuickOpenEntryGroup {
 			if (activeEditor) {
 				const editor = <IEditor>activeEditor.getControl();
 				editor.setSelection(range);
-				editor.revealRangeInCenter(range);
+				editor.revealRangeInCenter(range, ScrollType.Smooth);
 			}
 		}
 
@@ -334,7 +337,7 @@ class SymbolEntry extends EditorQuickOpenEntryGroup {
 		const activeEditor = this.editorService.getActiveEditor();
 		if (activeEditor) {
 			const editorControl = <IEditor>activeEditor.getControl();
-			editorControl.revealRangeInCenter(range);
+			editorControl.revealRangeInCenter(range, ScrollType.Smooth);
 
 			// Decorate if possible
 			if (types.isFunction(editorControl.changeDecorations)) {
@@ -366,6 +369,9 @@ interface IEditorLineDecoration {
 }
 
 export class GotoSymbolHandler extends QuickOpenHandler {
+
+	public static readonly ID = 'workbench.picker.filesymbols';
+
 	private outlineToModelCache: { [modelId: string]: OutlineModel; };
 	private rangeHighlightDecorationId: IEditorLineDecoration;
 	private lastKnownEditorViewState: IEditorViewState;
@@ -420,7 +426,7 @@ export class GotoSymbolHandler extends QuickOpenHandler {
 				model = (<IDiffEditorModel>model).modified; // Support for diff editor models
 			}
 
-			if (model && types.isFunction((<ITokenizedModel>model).getMode)) {
+			if (model && types.isFunction((<ITokenizedModel>model).getLanguageIdentifier)) {
 				canRun = DocumentSymbolProviderRegistry.has(<IModel>model);
 			}
 		}
@@ -451,10 +457,13 @@ export class GotoSymbolHandler extends QuickOpenHandler {
 
 			// Show parent scope as description
 			const description: string = element.containerName;
+			const icon = symbolKindToCssClass(element.kind);
 
 			// Add
-			const icon = SymbolKind.from(element.kind);
-			results.push(new SymbolEntry(i, label, SymbolKind.from(element.kind), description, icon, element.location.range, null, this.editorService, this));
+			results.push(new SymbolEntry(i,
+				label, icon, description, icon,
+				element.location.range, null, this.editorService, this
+			));
 		}
 
 		return results;
@@ -476,7 +485,7 @@ export class GotoSymbolHandler extends QuickOpenHandler {
 				model = (<IDiffEditorModel>model).modified; // Support for diff editor models
 			}
 
-			if (model && types.isFunction((<ITokenizedModel>model).getMode)) {
+			if (model && types.isFunction((<ITokenizedModel>model).getLanguageIdentifier)) {
 
 				// Ask cache first
 				const modelId = (<IModel>model).id;
@@ -496,7 +505,7 @@ export class GotoSymbolHandler extends QuickOpenHandler {
 			}
 		}
 
-		return TPromise.as<OutlineModel>(null);
+		return TPromise.wrap<OutlineModel>(null);
 	}
 
 	public decorateOutline(fullRange: IRange, startRange: IRange, editor: IEditor, position: Position): void {
@@ -525,8 +534,8 @@ export class GotoSymbolHandler extends QuickOpenHandler {
 					range: startRange,
 					options: {
 						overviewRuler: {
-							color: 'rgba(0, 122, 204, 0.6)',
-							darkColor: 'rgba(0, 122, 204, 0.6)',
+							color: themeColorFromId(overviewRulerRangeHighlight),
+							darkColor: themeColorFromId(overviewRulerRangeHighlight),
 							position: OverviewRulerLane.Full
 						}
 					}

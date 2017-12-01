@@ -9,6 +9,8 @@ import 'vs/css!./media/extensionsWidgets';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { IExtension, IExtensionsWorkbenchService } from '../common/extensions';
 import { append, $, addClass } from 'vs/base/browser/dom';
+import * as platform from 'vs/base/common/platform';
+import { localize } from 'vs/nls';
 
 export interface IOptions {
 	extension?: IExtension;
@@ -75,15 +77,20 @@ export class InstallWidget implements IDisposable {
 
 		if (this.options.small) {
 			if (installCount > 1000000) {
-				installLabel = `${Math.floor(installCount / 1000000)}M`;
+				installLabel = `${Math.floor(installCount / 100000) / 10}M`;
 			} else if (installCount > 1000) {
 				installLabel = `${Math.floor(installCount / 1000)}K`;
+			} else {
+				installLabel = String(installCount);
 			}
+		}
+		else {
+			installLabel = installCount.toLocaleString(platform.locale);
 		}
 
 		append(this.container, $('span.octicon.octicon-cloud-download'));
 		const count = append(this.container, $('span.count'));
-		count.textContent = installLabel || String(installCount);
+		count.textContent = installLabel;
 	}
 
 	dispose(): void {
@@ -136,6 +143,7 @@ export class RatingsWidget implements IDisposable {
 
 			const count = append(this.container, $('span.count'));
 			count.textContent = String(rating);
+			this.container.title = localize('ratedByUsers', "Rated by {0} users", this.extension.ratingCount);
 		} else {
 			for (let i = 1; i <= 5; i++) {
 				if (rating >= i) {

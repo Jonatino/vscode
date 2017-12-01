@@ -21,14 +21,8 @@ suite('EditorSimpleWorker', () => {
 			this.acceptNewModel({
 				url: uri,
 				versionId: 1,
-				value: {
-					EOL: eol,
-					lines,
-					BOM: undefined,
-					containsRTL: undefined,
-					length: undefined,
-					options: undefined
-				}
+				lines: lines,
+				EOL: eol
 			});
 			return this._getModel(uri);
 		}
@@ -94,7 +88,7 @@ suite('EditorSimpleWorker', () => {
 
 	test('MoreMinimal', function () {
 
-		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: 'This is line One', range: new Range(1, 1, 1, 17) }], []).then(edits => {
+		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: 'This is line One', range: new Range(1, 1, 1, 17) }]).then(edits => {
 			assert.equal(edits.length, 1);
 			const [first] = edits;
 			assert.equal(first.text, 'O');
@@ -110,7 +104,7 @@ suite('EditorSimpleWorker', () => {
 			'}'
 		], '\n');
 
-		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: '{\r\n\t"a":1\r\n}', range: new Range(1, 1, 3, 2) }], []).then(edits => {
+		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: '{\r\n\t"a":1\r\n}', range: new Range(1, 1, 3, 2) }]).then(edits => {
 			assert.equal(edits.length, 0);
 		});
 	});
@@ -123,7 +117,7 @@ suite('EditorSimpleWorker', () => {
 			'}'
 		], '\n');
 
-		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: '{\r\n\t"b":1\r\n}', range: new Range(1, 1, 3, 2) }], []).then(edits => {
+		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: '{\r\n\t"b":1\r\n}', range: new Range(1, 1, 3, 2) }]).then(edits => {
 			assert.equal(edits.length, 1);
 			const [first] = edits;
 			assert.equal(first.text, 'b');
@@ -139,7 +133,7 @@ suite('EditorSimpleWorker', () => {
 			'}'				// 3
 		]);
 
-		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: '\n', range: new Range(3, 2, 4, 1000) }], []).then(edits => {
+		return worker.computeMoreMinimalEdits(model.uri.toString(), [{ text: '\n', range: new Range(3, 2, 4, 1000) }]).then(edits => {
 			assert.equal(edits.length, 1);
 			const [first] = edits;
 			assert.equal(first.text, '\n');
@@ -169,7 +163,7 @@ suite('EditorSimpleWorker', () => {
 		]);
 
 		return worker.textualSuggest(model.uri.toString(), { lineNumber: 2, column: 2 }, '[a-z]+', 'img').then((result) => {
-			const {suggestions} = result;
+			const { suggestions } = result;
 			assert.equal(suggestions.length, 1);
 			assert.equal(suggestions[0].label, 'foobar');
 		});

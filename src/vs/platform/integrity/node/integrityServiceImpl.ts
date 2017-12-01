@@ -22,7 +22,7 @@ interface IStorageData {
 }
 
 class IntegrityStorage {
-	private static KEY = 'integrityService';
+	private static readonly KEY = 'integrityService';
 
 	private _storageService: IStorageService;
 	private _value: IStorageData;
@@ -141,6 +141,7 @@ export class IntegrityServiceImpl implements IIntegrityService {
 				for (let i = 0, len = allResults.length; isPure && i < len; i++) {
 					if (!allResults[i].isPure) {
 						isPure = false;
+						break;
 					}
 				}
 

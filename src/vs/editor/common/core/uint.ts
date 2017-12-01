@@ -7,8 +7,8 @@
 export class Uint8Matrix {
 
 	private _data: Uint8Array;
-	private _rows: number;
-	private _cols: number;
+	public readonly rows: number;
+	public readonly cols: number;
 
 	constructor(rows: number, cols: number, defaultValue: number) {
 		let data = new Uint8Array(rows * cols);
@@ -17,16 +17,16 @@ export class Uint8Matrix {
 		}
 
 		this._data = data;
-		this._rows = rows;
-		this._cols = cols;
+		this.rows = rows;
+		this.cols = cols;
 	}
 
 	public get(row: number, col: number): number {
-		return this._data[row * this._cols + col];
+		return this._data[row * this.cols + col];
 	}
 
 	public set(row: number, col: number, value: number): void {
-		this._data[row * this._cols + col] = value;
+		this._data[row * this.cols + col] = value;
 	}
 }
 
@@ -35,8 +35,17 @@ export const enum Constants {
 	 * MAX SMI (SMall Integer) as defined in v8.
 	 * one bit is lost for boxing/unboxing flag.
 	 * one bit is lost for sign flag.
+	 * See https://thibaultlaurens.github.io/javascript/2013/04/29/how-the-v8-engine-works/#tagged-values
 	 */
 	MAX_SAFE_SMALL_INTEGER = 1 << 30,
+
+	/**
+	 * MIN SMI (SMall Integer) as defined in v8.
+	 * one bit is lost for boxing/unboxing flag.
+	 * one bit is lost for sign flag.
+	 * See https://thibaultlaurens.github.io/javascript/2013/04/29/how-the-v8-engine-works/#tagged-values
+	 */
+	MIN_SAFE_SMALL_INTEGER = -(1 << 30),
 
 	/**
 	 * Max unsigned integer that fits on 8 bits.

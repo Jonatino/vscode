@@ -1,6 +1,8 @@
 {
 	"name": "less",
-	"version": "0.1.0",
+	"displayName": "%displayName%",
+	"description": "%description%",
+	"version": "1.0.0",
 	"publisher": "vscode",
 	"engines": { "vscode": "*" },
 	"scripts": {
@@ -19,15 +21,12 @@
 			"scopeName": "source.css.less",
 			"path": "./syntaxes/less.tmLanguage.json"
 		}],
-		"snippets": [{
-			"language": "less",
-			"path": "./snippets/less.snippets.json"
-		}],
 		"problemMatchers": [
 			{
 				"name": "lessc",
 				"label": "Lessc compiler",
 				"owner": "lessc",
+				"source": "less",
 				"fileLocation": "absolute",
 				"pattern": {
 					"regexp": "(.*)\\sin\\s(.*)\\son line\\s(\\d+),\\scolumn\\s(\\d+)",

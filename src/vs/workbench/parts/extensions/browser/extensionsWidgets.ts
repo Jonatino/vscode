@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import 'vs/css!./media/extensionsWidgets';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { IExtension, IExtensionsWorkbenchService } from '../common/extensions';
@@ -42,7 +40,7 @@ export class Label implements IDisposable {
 	}
 }
 
-export class InstallWidget implements IDisposable {
+export class InstallCountWidget implements IDisposable {
 
 	private disposables: IDisposable[] = [];
 	private _extension: IExtension;
@@ -143,7 +141,7 @@ export class RatingsWidget implements IDisposable {
 
 			const count = append(this.container, $('span.count'));
 			count.textContent = String(rating);
-			this.container.title = localize('ratedByUsers', "Rated by {0} users", this.extension.ratingCount);
+			this.container.title = this.extension.ratingCount > 1 ? localize('ratedByUsers', "Rated by {0} users", this.extension.ratingCount) : localize('ratedBySingleUser', "Rated by 1 user");
 		} else {
 			for (let i = 1; i <= 5; i++) {
 				if (rating >= i) {

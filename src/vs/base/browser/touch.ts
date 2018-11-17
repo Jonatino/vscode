@@ -2,11 +2,10 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import arrays = require('vs/base/common/arrays');
-import { IDisposable, dispose } from 'vs/base/common/lifecycle';
-import DomUtils = require('vs/base/browser/dom');
+import * as arrays from 'vs/base/common/arrays';
+import { IDisposable, Disposable } from 'vs/base/common/lifecycle';
+import * as DomUtils from 'vs/base/browser/dom';
 import { memoize } from 'vs/base/common/decorators';
 
 export namespace EventType {
@@ -29,7 +28,7 @@ interface TouchData {
 }
 
 export interface GestureEvent extends MouseEvent {
-	initialTarget: EventTarget;
+	initialTarget: EventTarget | undefined;
 	translationX: number;
 	translationY: number;
 	pageX: number;
@@ -64,26 +63,27 @@ interface TouchEvent extends Event {
 	changedTouches: TouchList;
 }
 
-export class Gesture implements IDisposable {
+export class Gesture extends Disposable {
 
 	private static readonly SCROLL_FRICTION = -0.005;
 	private static INSTANCE: Gesture;
 	private static HOLD_DELAY = 700;
 
+	private dispatched: boolean;
 	private targets: HTMLElement[];
-	private toDispose: IDisposable[];
-	private handle: IDisposable;
+	private handle: IDisposable | null;
 
 	private activeTouches: { [id: number]: TouchData; };
 
 	private constructor() {
-		this.toDispose = [];
+		super();
+
 		this.activeTouches = {};
 		this.handle = null;
 		this.targets = [];
-		this.toDispose.push(DomUtils.addDisposableListener(document, 'touchstart', (e) => this.onTouchStart(e)));
-		this.toDispose.push(DomUtils.addDisposableListener(document, 'touchend', (e) => this.onTouchEnd(e)));
-		this.toDispose.push(DomUtils.addDisposableListener(document, 'touchmove', (e) => this.onTouchMove(e)));
+		this._register(DomUtils.addDisposableListener(document, 'touchstart', (e) => this.onTouchStart(e)));
+		this._register(DomUtils.addDisposableListener(document, 'touchend', (e) => this.onTouchEnd(e)));
+		this._register(DomUtils.addDisposableListener(document, 'touchmove', (e) => this.onTouchMove(e)));
 	}
 
 	public static addTarget(element: HTMLElement): void {
@@ -99,15 +99,16 @@ export class Gesture implements IDisposable {
 
 	@memoize
 	private static isTouchDevice(): boolean {
-		return 'ontouchstart' in window || navigator.maxTouchPoints > 0 || window.navigator.msMaxTouchPoints > 0;
+		return 'ontouchstart' in window as any || navigator.maxTouchPoints > 0 || window.navigator.msMaxTouchPoints > 0;
 	}
 
 	public dispose(): void {
 		if (this.handle) {
 			this.handle.dispose();
-			dispose(this.toDispose);
 			this.handle = null;
 		}
+
+		super.dispose();
 	}
 
 	private onTouchStart(e: TouchEvent): void {
@@ -136,6 +137,12 @@ export class Gesture implements IDisposable {
 			evt.pageX = touch.pageX;
 			evt.pageY = touch.pageY;
 			this.dispatchEvent(evt);
+		}
+
+		if (this.dispatched) {
+			e.preventDefault();
+			e.stopPropagation();
+			this.dispatched = false;
 		}
 	}
 
@@ -194,8 +201,16 @@ export class Gesture implements IDisposable {
 				);
 			}
 
+
+			this.dispatchEvent(this.newGestureEvent(EventType.End, data.initialTarget));
 			// forget about this touch
 			delete this.activeTouches[touch.identifier];
+		}
+
+		if (this.dispatched) {
+			e.preventDefault();
+			e.stopPropagation();
+			this.dispatched = false;
 		}
 	}
 
@@ -210,6 +225,7 @@ export class Gesture implements IDisposable {
 		this.targets.forEach(target => {
 			if (event.initialTarget instanceof Node && target.contains(event.initialTarget)) {
 				target.dispatchEvent(event);
+				this.dispatched = true;
 			}
 		});
 	}
@@ -279,6 +295,12 @@ export class Gesture implements IDisposable {
 			data.rollingPageX.push(touch.pageX);
 			data.rollingPageY.push(touch.pageY);
 			data.rollingTimestamps.push(timestamp);
+		}
+
+		if (this.dispatched) {
+			e.preventDefault();
+			e.stopPropagation();
+			this.dispatched = false;
 		}
 	}
 }

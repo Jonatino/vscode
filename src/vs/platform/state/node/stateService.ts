@@ -3,26 +3,30 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as path from 'path';
-import * as fs from 'original-fs';
+import * as fs from 'fs';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { writeFileAndFlushSync } from 'vs/base/node/extfs';
 import { isUndefined, isUndefinedOrNull } from 'vs/base/common/types';
 import { IStateService } from 'vs/platform/state/common/state';
+import { ILogService } from 'vs/platform/log/common/log';
 
 export class FileStorage {
 
-	private database: object = null;
+	private _lazyDatabase: object | null = null;
 
-	constructor(private dbPath: string, private verbose?: boolean) { }
+	constructor(private dbPath: string, private onError: (error) => void) { }
 
-	public getItem<T>(key: string, defaultValue?: T): T {
-		if (!this.database) {
-			this.database = this.load();
+	private get database(): object {
+		if (!this._lazyDatabase) {
+			this._lazyDatabase = this.loadSync();
 		}
+		return this._lazyDatabase;
+	}
 
+	getItem<T>(key: string, defaultValue: T): T;
+	getItem<T>(key: string, defaultValue?: T): T | undefined;
+	getItem<T>(key: string, defaultValue?: T): T | undefined {
 		const res = this.database[key];
 		if (isUndefinedOrNull(res)) {
 			return defaultValue;
@@ -31,11 +35,7 @@ export class FileStorage {
 		return res;
 	}
 
-	public setItem(key: string, data: any): void {
-		if (!this.database) {
-			this.database = this.load();
-		}
-
+	setItem(key: string, data: any): void {
 		// Remove an item when it is undefined or null
 		if (isUndefinedOrNull(data)) {
 			return this.removeItem(key);
@@ -49,40 +49,34 @@ export class FileStorage {
 		}
 
 		this.database[key] = data;
-		this.save();
+		this.saveSync();
 	}
 
-	public removeItem(key: string): void {
-		if (!this.database) {
-			this.database = this.load();
-		}
-
+	removeItem(key: string): void {
 		// Only update if the key is actually present (not undefined)
 		if (!isUndefined(this.database[key])) {
 			this.database[key] = void 0;
-			this.save();
+			this.saveSync();
 		}
 	}
 
-	private load(): object {
+	private loadSync(): object {
 		try {
 			return JSON.parse(fs.readFileSync(this.dbPath).toString()); // invalid JSON or permission issue can happen here
 		} catch (error) {
-			if (this.verbose) {
-				console.error(error);
+			if (error && error.code !== 'ENOENT') {
+				this.onError(error);
 			}
 
 			return {};
 		}
 	}
 
-	private save(): void {
+	private saveSync(): void {
 		try {
 			writeFileAndFlushSync(this.dbPath, JSON.stringify(this.database, null, 4)); // permission issue can happen here
 		} catch (error) {
-			if (this.verbose) {
-				console.error(error);
-			}
+			this.onError(error);
 		}
 	}
 }
@@ -93,19 +87,21 @@ export class StateService implements IStateService {
 
 	private fileStorage: FileStorage;
 
-	constructor( @IEnvironmentService environmentService: IEnvironmentService) {
-		this.fileStorage = new FileStorage(path.join(environmentService.userDataPath, 'storage.json'), environmentService.verbose);
+	constructor(@IEnvironmentService environmentService: IEnvironmentService, @ILogService logService: ILogService) {
+		this.fileStorage = new FileStorage(path.join(environmentService.userDataPath, 'storage.json'), error => logService.error(error));
 	}
 
-	public getItem<T>(key: string, defaultValue?: T): T {
+	getItem<T>(key: string, defaultValue: T): T;
+	getItem<T>(key: string, defaultValue: T | undefined): T | undefined;
+	getItem<T>(key: string, defaultValue?: T): T | undefined {
 		return this.fileStorage.getItem(key, defaultValue);
 	}
 
-	public setItem(key: string, data: any): void {
+	setItem(key: string, data: any): void {
 		this.fileStorage.setItem(key, data);
 	}
 
-	public removeItem(key: string): void {
+	removeItem(key: string): void {
 		this.fileStorage.removeItem(key);
 	}
 }

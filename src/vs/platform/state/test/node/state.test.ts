@@ -3,14 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import * as assert from 'assert';
-import os = require('os');
-import path = require('path');
-import extfs = require('vs/base/node/extfs');
+import * as os from 'os';
+import * as path from 'path';
+import * as extfs from 'vs/base/node/extfs';
 import { getRandomTestPath } from 'vs/workbench/test/workbenchTestServices';
-import { writeFileAndFlushSync, mkdirp } from 'vs/base/node/extfs';
 import { FileStorage } from 'vs/platform/state/node/stateService';
 
 suite('StateService', () => {
@@ -21,11 +18,11 @@ suite('StateService', () => {
 		extfs.del(parentDir, os.tmpdir(), done);
 	});
 
-	test('Basics', done => {
-		return mkdirp(parentDir).then(() => {
-			writeFileAndFlushSync(storageFile, '');
+	test('Basics', () => {
+		return extfs.mkdirp(parentDir).then(() => {
+			extfs.writeFileAndFlushSync(storageFile, '');
 
-			let service = new FileStorage(storageFile);
+			let service = new FileStorage(storageFile, () => null);
 
 			service.setItem('some.key', 'some.value');
 			assert.equal(service.getItem('some.key'), 'some.value');
@@ -37,7 +34,7 @@ suite('StateService', () => {
 
 			service.setItem('some.other.key', 'some.other.value');
 
-			service = new FileStorage(storageFile);
+			service = new FileStorage(storageFile, () => null);
 
 			assert.equal(service.getItem('some.other.key'), 'some.other.value');
 
@@ -49,8 +46,6 @@ suite('StateService', () => {
 
 			service.setItem('some.null.key', null);
 			assert.equal(service.getItem('some.null.key', 'some.default'), 'some.default');
-
-			done();
 		});
 	});
 });

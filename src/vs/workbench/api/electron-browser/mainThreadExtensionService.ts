@@ -2,14 +2,13 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import Severity from 'vs/base/common/severity';
-import { IExtensionService } from 'vs/platform/extensions/common/extensions';
-import { MainThreadExtensionServiceShape, MainContext, IExtHostContext } from '../node/extHost.protocol';
-import { ExtensionService } from 'vs/workbench/services/extensions/electron-browser/extensionService';
-import { extHostNamedCustomer } from 'vs/workbench/api/electron-browser/extHostCustomers';
 import { SerializedError } from 'vs/base/common/errors';
+import Severity from 'vs/base/common/severity';
+import { extHostNamedCustomer } from 'vs/workbench/api/electron-browser/extHostCustomers';
+import { IExtHostContext, MainContext, MainThreadExtensionServiceShape } from 'vs/workbench/api/node/extHost.protocol';
+import { IExtensionService } from 'vs/workbench/services/extensions/common/extensions';
+import { ExtensionService } from 'vs/workbench/services/extensions/electron-browser/extensionService';
 
 @extHostNamedCustomer(MainContext.MainThreadExtensionService)
 export class MainThreadExtensionService implements MainThreadExtensionServiceShape {
@@ -40,6 +39,8 @@ export class MainThreadExtensionService implements MainThreadExtensionServiceSha
 		error.message = data.message;
 		error.stack = data.stack;
 		this._extensionService._onExtensionRuntimeError(extensionId, error);
+		console.error(`[${extensionId}]${error.message}`);
+		console.error(error.stack);
 	}
 	$onExtensionActivationFailed(extensionId: string): void {
 	}

@@ -4,12 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import { URI } from 'vs/base/common/uri';
 
 export interface ParsedArgs {
 	[arg: string]: any;
 	_: string[];
+	'folder-uri'?: string | string[];
+	'file-uri'?: string | string[];
+	_urls?: string[];
 	help?: boolean;
 	version?: boolean;
+	status?: boolean;
 	wait?: boolean;
 	waitMarkerFilePath?: string;
 	diff?: boolean;
@@ -23,10 +28,15 @@ export interface ParsedArgs {
 	performance?: boolean;
 	'prof-startup'?: string;
 	'prof-startup-prefix'?: string;
+	'prof-append-timers'?: string;
 	verbose?: boolean;
+	trace?: boolean;
+	'trace-category-filter'?: string;
+	'trace-options'?: string;
+	log?: string;
 	logExtensionHostCommunication?: boolean;
-	'disable-extensions'?: boolean;
 	'extensions-dir'?: string;
+	'builtin-extensions-dir'?: string;
 	extensionDevelopmentPath?: string;
 	extensionTestsPath?: string;
 	debugPluginHost?: string;
@@ -34,21 +44,31 @@ export interface ParsedArgs {
 	debugId?: string;
 	debugSearch?: string;
 	debugBrkSearch?: string;
+	'disable-extensions'?: boolean;
+	'disable-extension'?: string | string[];
 	'list-extensions'?: boolean;
 	'show-versions'?: boolean;
 	'install-extension'?: string | string[];
 	'uninstall-extension'?: string | string[];
 	'enable-proposed-api'?: string | string[];
-	'open-url'?: string | string[];
+	'open-url'?: boolean;
 	'skip-getting-started'?: boolean;
+	'skip-release-notes'?: boolean;
 	'sticky-quickopen'?: boolean;
+	'disable-restore-windows'?: boolean;
 	'disable-telemetry'?: boolean;
 	'export-default-configuration'?: string;
 	'install-source'?: string;
 	'disable-updates'?: string;
 	'disable-crash-reporter'?: string;
 	'skip-add-to-recently-opened'?: boolean;
-	'ps'?: boolean;
+	'max-memory'?: number;
+	'file-write'?: boolean;
+	'file-chmod'?: boolean;
+	'upload-logs'?: string;
+	'driver'?: string;
+	'driver-verbose'?: boolean;
+	remote?: string;
 }
 
 export const IEnvironmentService = createDecorator<IEnvironmentService>('environmentService');
@@ -68,6 +88,7 @@ export interface IEnvironmentService {
 	args: ParsedArgs;
 
 	execPath: string;
+	cliPath: string;
 	appRoot: string;
 
 	userHome: string;
@@ -78,9 +99,11 @@ export interface IEnvironmentService {
 	appSettingsHome: string;
 	appSettingsPath: string;
 	appKeybindingsPath: string;
-	machineUUID: string;
+
 	settingsSearchBuildId: number;
 	settingsSearchUrl: string;
+
+	workspaceStorageHome: string;
 
 	backupHome: string;
 	backupWorkspacesPath: string;
@@ -88,23 +111,29 @@ export interface IEnvironmentService {
 	workspacesHome: string;
 
 	isExtensionDevelopment: boolean;
-	disableExtensions: boolean;
+	disableExtensions: boolean | string[];
+	builtinExtensionsPath: string;
 	extensionsPath: string;
-	extensionDevelopmentPath: string;
+	extensionDevelopmentLocationURI: URI;
 	extensionTestsPath: string;
 
 	debugExtensionHost: IExtensionHostDebugParams;
 	debugSearch: IDebugParams;
 
-
 	logExtensionHostCommunication: boolean;
 
 	isBuilt: boolean;
-	verbose: boolean;
 	wait: boolean;
+	status: boolean;
 	performance: boolean;
 
+	// logging
+	log: string;
+	logsPath: string;
+	verbose: boolean;
+
 	skipGettingStarted: boolean | undefined;
+	skipReleaseNotes: boolean | undefined;
 
 	skipAddToRecentlyOpened: boolean;
 
@@ -116,4 +145,7 @@ export interface IEnvironmentService {
 	installSourcePath: string;
 	disableUpdates: boolean;
 	disableCrashReporter: boolean;
+
+	driverHandle: string;
+	driverVerbose: boolean;
 }

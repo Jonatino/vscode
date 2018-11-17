@@ -3,20 +3,71 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
-import { readdirSync, statSync } from 'fs';
+import { readdir, stat, exists, readFile } from 'fs';
+import { join } from 'path';
+import { parse, ParseError } from 'vs/base/common/json';
 
 export interface WorkspaceStatItem {
 	name: string;
-	value: number;
+	count: number;
 }
+
 export interface WorkspaceStats {
 	fileTypes: WorkspaceStatItem[];
 	configFiles: WorkspaceStatItem[];
+	fileCount: number;
+	maxFilesReached: boolean;
 }
 
-export function collectWorkspaceStats(folder: string, filter: string[]): WorkspaceStats {
+function asSortedItems(map: Map<string, number>): WorkspaceStatItem[] {
+	let a: WorkspaceStatItem[] = [];
+	map.forEach((value, index) => a.push({ name: index, count: value }));
+	return a.sort((a, b) => b.count - a.count);
+}
+
+export function collectLaunchConfigs(folder: string): Promise<WorkspaceStatItem[]> {
+	let launchConfigs = new Map<string, number>();
+
+	let launchConfig = join(folder, '.vscode', 'launch.json');
+	return new Promise((resolve, reject) => {
+		exists(launchConfig, (doesExist) => {
+			if (doesExist) {
+				readFile(launchConfig, (err, contents) => {
+					if (err) {
+						return resolve([]);
+					}
+
+					const errors: ParseError[] = [];
+					const json = parse(contents.toString(), errors);
+					if (errors.length) {
+						console.log(`Unable to parse ${launchConfig}`);
+						return resolve([]);
+					}
+
+					if (json['configurations']) {
+						for (const each of json['configurations']) {
+							const type = each['type'];
+							if (type) {
+								if (launchConfigs.has(type)) {
+									launchConfigs.set(type, launchConfigs.get(type) + 1);
+								}
+								else {
+									launchConfigs.set(type, 1);
+								}
+							}
+						}
+					}
+
+					return resolve(asSortedItems(launchConfigs));
+				});
+			} else {
+				return resolve([]);
+			}
+		});
+	});
+}
+
+export function collectWorkspaceStats(folder: string, filter: string[]): Promise<WorkspaceStats> {
 	const configFilePatterns = [
 		{ 'tag': 'grunt.js', 'pattern': /^gruntfile\.js$/i },
 		{ 'tag': 'gulp.js', 'pattern': /^gulpfile\.js$/i },
@@ -39,19 +90,64 @@ export function collectWorkspaceStats(folder: string, filter: string[]): Workspa
 	let fileTypes = new Map<string, number>();
 	let configFiles = new Map<string, number>();
 
-	let walkSync = (dir: string, acceptFile: (fileName: string) => void, filter: string[]) => {
-		let files = readdirSync(dir);
-		for (const file of files) {
-			if (statSync(dir + '/' + file).isDirectory()) {
-				if (filter.indexOf(file) === -1) {
-					walkSync(dir + '/' + file, acceptFile, filter);
+	const MAX_FILES = 20000;
+
+	function walk(dir: string, filter: string[], token, done: (allFiles: string[]) => void): void {
+		let results: string[] = [];
+		readdir(dir, async (err, files) => {
+			// Ignore folders that can't be read
+			if (err) {
+				return done(results);
+			}
+
+			let pending = files.length;
+			if (pending === 0) {
+				return done(results);
+			}
+
+			for (const file of files) {
+				if (token.maxReached) {
+					return done(results);
 				}
+
+				stat(join(dir, file), (err, stats) => {
+					// Ignore files that can't be read
+					if (err) {
+						if (--pending === 0) {
+							return done(results);
+						}
+					} else {
+						if (stats.isDirectory()) {
+							if (filter.indexOf(file) === -1) {
+								walk(join(dir, file), filter, token, (res: string[]) => {
+									results = results.concat(res);
+
+									if (--pending === 0) {
+										return done(results);
+									}
+								});
+							} else {
+								if (--pending === 0) {
+									done(results);
+								}
+							}
+						} else {
+							if (token.count >= MAX_FILES) {
+								token.maxReached = true;
+							}
+
+							token.count++;
+							results.push(file);
+
+							if (--pending === 0) {
+								done(results);
+							}
+						}
+					}
+				});
 			}
-			else {
-				acceptFile(file);
-			}
-		}
-	};
+		});
+	}
 
 	let addFileType = (fileType: string) => {
 		if (fileTypes.has(fileType)) {
@@ -84,17 +180,19 @@ export function collectWorkspaceStats(folder: string, filter: string[]): Workspa
 		addConfigFiles(name);
 	};
 
-	let asSortedItems = (map: Map<string, number>): WorkspaceStatItem[] => {
-		let a: WorkspaceStatItem[] = [];
-		map.forEach((value, index) => a.push({ name: index, value: value }));
-		return a.sort((a, b) => b.value - a.value);
-	};
+	let token: { count: number, maxReached: boolean } = { count: 0, maxReached: false };
 
-	walkSync(folder, acceptFile, filter);
+	return new Promise((resolve, reject) => {
+		walk(folder, filter, token, (files) => {
+			files.forEach(acceptFile);
 
-	let result = {
-		'configFiles': asSortedItems(configFiles),
-		'fileTypes': asSortedItems(fileTypes)
-	};
-	return result;
+			resolve({
+				configFiles: asSortedItems(configFiles),
+				fileTypes: asSortedItems(fileTypes),
+				fileCount: token.count,
+				maxFilesReached: token.maxReached
+
+			});
+		});
+	});
 }
